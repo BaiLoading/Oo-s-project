@@ -1,0 +1,776 @@
+{
+  "success": true,
+  "status": 0,
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "requestId": null,
+    "message": "OK",
+    "status": 0,
+    "code": 0,
+    "data": {
+      "protocolType": "SEARCH_DATA",
+      "id": "8e47d3ed-aad7-4875-93b1-af8799453f8f",
+      "refSeq": null,
+      "keyEntityList": null,
+      "searchDataResultDTO": {
+        "questionId": "3761d515-d0f4-422f-b33f-c91194c03631",
+        "dataTableDTOList": [
+          {
+            "code": "600519.SH",
+            "entityName": "贵州茅台(600519.SH)",
+            "table": {
+              "219": [
+                "1383.2"
+              ],
+              "218": [
+                "1498.0699"
+              ],
+              "headName": [
+                "2026-03-30 17:25"
+              ]
+            },
+            "rawTable": {
+              "219": [
+                "1383.2"
+              ],
+              "218": [
+                "1498.0699"
+              ],
+              "headName": [
+                "2026-03-30 17:25"
+              ]
+            },
+            "truncateRawTable": {},
+            "nameMap": {
+              "219": "支撑位",
+              "headNameSub": "数据来源",
+              "218": "压力位"
+            },
+            "headNameMap": {},
+            "field": {
+              "returnCode": "ZCW_219_4",
+              "returnName": "支撑位",
+              "classCode": "007001",
+              "checkedRelatedIndicators": true,
+              "startDate": "2026-03-30 00:00:00",
+              "endDate": "2026-03-30 00:00:00",
+              "fuzzy": false,
+              "defineType": 0,
+              "isLoopN": false,
+              "apiCode": "4",
+              "isGroup": false,
+              "returnSourceCode": "219",
+              "returnSourceName": "支撑位",
+              "graph": "2",
+              "unit": "0",
+              "tableType": "2"
+            },
+            "entityCodes": [
+              "600519.SH"
+            ],
+            "macroAttributeExcelMap": {},
+            "fieldSet": [
+              {
+                "returnCode": "ZCW_219_4",
+                "returnName": "支撑位",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "4",
+                "isGroup": false,
+                "returnSourceCode": "219",
+                "returnSourceName": "支撑位",
+                "graph": "2",
+                "unit": "0",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "YLW_218_4",
+                "returnName": "压力位",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "4",
+                "isGroup": false,
+                "returnSourceCode": "218",
+                "returnSourceName": "压力位",
+                "graph": "2",
+                "unit": "0",
+                "tableType": "2"
+              }
+            ],
+            "dataTableType": "NORM_TABLE",
+            "rowInfo": {},
+            "colInfo": {},
+            "indicatorOrder": [
+              "219",
+              "218"
+            ],
+            "tipFlags": [
+              "0"
+            ],
+            "dataType": "行情数据",
+            "title": "贵州茅台(600519.SH)当前的支撑位、压力位",
+            "hasThumbnail": true,
+            "indicatorLimited": false,
+            "dataPositionEnum": "MetricLeftTimeTop",
+            "orderCol": {},
+            "jumpUrlList": [],
+            "dataTypeEnum": "HQ",
+            "dateRuleSet": [],
+            "freqConvert": false,
+            "deleteInfo": [],
+            "macroCodeMap": {},
+            "entityTagDTO": {
+              "entityId": "1000002162",
+              "entityType": "SEC",
+              "entityTypeCode": "058001001",
+              "entityTypeName": "A股",
+              "classCode": "002001",
+              "className": "沪深京股票",
+              "publishCode": "",
+              "fullName": "贵州茅台",
+              "shortName": "",
+              "secuCode": "600519",
+              "market": "1",
+              "marketChar": ".SH",
+              "correct": false,
+              "securityName": "贵州茅台",
+              "hasKLine": false,
+              "valuation": false
+            },
+            "entityTagDTOList": [
+              {
+                "entityId": "1000002162",
+                "entityType": "SEC",
+                "entityTypeCode": "058001001",
+                "entityTypeName": "A股",
+                "classCode": "002001",
+                "className": "沪深京股票",
+                "publishCode": "",
+                "fullName": "贵州茅台",
+                "shortName": "",
+                "secuCode": "600519",
+                "market": "1",
+                "marketChar": ".SH",
+                "correct": false,
+                "securityName": "贵州茅台",
+                "hasKLine": true,
+                "valuation": false
+              }
+            ],
+            "indexTable": false,
+            "edbThirdData": false,
+            "dataUpdate": {
+              "2026-03-30 17:25": false
+            },
+            "supportsTimeSeries": false,
+            "estimatedTokens": 0,
+            "summaryTips": {
+              "periodicalReport": null
+            },
+            "nestEntityListMap": {},
+            "excelTimeTruncate": false,
+            "frontendEntityName": "",
+            "frontendEntityCode": "",
+            "frontendTitle": "",
+            "frontendDesc": "",
+            "indicatorCount": 0,
+            "fieldParameterStr": "",
+            "tdayEnum": "NORMAL"
+          },
+          {
+            "code": "600519.SH",
+            "entityName": "贵州茅台(600519.SH)",
+            "table": {
+              "f3": [
+                "0.28%"
+              ],
+              "f109": [
+                "0.85%"
+              ],
+              "f6": [
+                "40.61亿元"
+              ],
+              "f5": [
+                "286.8万"
+              ],
+              "f17": [
+                "1407.00"
+              ],
+              "f15": [
+                "1431"
+              ],
+              "f2": [
+                "1420.00"
+              ],
+              "f352": [
+                "1415.63"
+              ],
+              "f16": [
+                "1403"
+              ],
+              "f8": [
+                "0.23%"
+              ],
+              "f7": [
+                "2.01%"
+              ],
+              "f500": [
+                "0"
+              ],
+              "f501": [
+                "0"
+              ],
+              "f88": [
+                "-0.002"
+              ],
+              "f89": [
+                "-0.003"
+              ],
+              "f90": [
+                "-2.58"
+              ],
+              "headName": [
+                "2026-03-30 17:25"
+              ]
+            },
+            "rawTable": {
+              "f3": [
+                "0.28"
+              ],
+              "f109": [
+                "0.85"
+              ],
+              "f6": [
+                "4060684934.00"
+              ],
+              "f5": [
+                "2868459"
+              ],
+              "f17": [
+                "1407.00"
+              ],
+              "f15": [
+                "1431.00"
+              ],
+              "f2": [
+                "1420.00"
+              ],
+              "f352": [
+                "1415.63"
+              ],
+              "f16": [
+                "1402.52"
+              ],
+              "f8": [
+                "0.23"
+              ],
+              "f7": [
+                "2.01"
+              ],
+              "f500": [
+                "0"
+              ],
+              "f501": [
+                "0"
+              ],
+              "f88": [
+                "-0.002"
+              ],
+              "f89": [
+                "-0.003"
+              ],
+              "f90": [
+                "-2.58"
+              ],
+              "headName": [
+                "2026-03-30 17:25"
+              ]
+            },
+            "truncateRawTable": {},
+            "nameMap": {
+              "f3": "涨跌幅",
+              "headNameSub": "数据来源",
+              "f109": "5日涨跌幅",
+              "f6": "成交额",
+              "f5": "成交量",
+              "f17": "开盘价",
+              "f15": "最高价",
+              "f2": "最新价",
+              "f352": "均价",
+              "f16": "最低价",
+              "f8": "换手率",
+              "f7": "振幅",
+              "f500": "是否涨停",
+              "f501": "是否跌停",
+              "f88": "当日DDX",
+              "f89": "当日DDY",
+              "f90": "当日DDZ"
+            },
+            "headNameMap": {},
+            "field": {
+              "returnCode": "ZDF_f3_3",
+              "returnName": "涨跌幅",
+              "classCode": "007001",
+              "checkedRelatedIndicators": true,
+              "startDate": "2026-03-30 00:00:00",
+              "endDate": "2026-03-30 00:00:00",
+              "fuzzy": false,
+              "defineType": 0,
+              "isLoopN": false,
+              "apiCode": "3",
+              "isGroup": false,
+              "returnSourceCode": "f3",
+              "returnSourceName": "涨跌幅",
+              "graph": "2",
+              "unit": "1",
+              "tableType": "2",
+              "unitName": "%",
+              "unitDesc": "901:%:%"
+            },
+            "entityCodes": [
+              "600519.SH"
+            ],
+            "macroAttributeExcelMap": {},
+            "fieldSet": [
+              {
+                "returnCode": "SFDT_f501_3",
+                "returnName": "是否跌停",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f501",
+                "returnSourceName": "是否跌停",
+                "graph": "0",
+                "unit": "0",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "ZF_f7_3",
+                "returnName": "振幅",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f7",
+                "returnSourceName": "振幅",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2",
+                "unitName": "%",
+                "unitDesc": "108:%:%"
+              },
+              {
+                "returnCode": "CJE_f6_3",
+                "returnName": "成交额",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f6",
+                "returnSourceName": "成交额",
+                "graph": "1",
+                "unit": "1",
+                "tableType": "2",
+                "unitName": "元",
+                "unitDesc": "101:元:元"
+              },
+              {
+                "returnCode": "ZDJ_f16_3",
+                "returnName": "最低价",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f16",
+                "returnSourceName": "最低价",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "ZDF_f3_3",
+                "returnName": "涨跌幅",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f3",
+                "returnSourceName": "涨跌幅",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2",
+                "unitName": "%",
+                "unitDesc": "901:%:%"
+              },
+              {
+                "returnCode": "ZXJ_f2_3",
+                "returnName": "最新价",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f2",
+                "returnSourceName": "最新价",
+                "graph": "2",
+                "unit": "0",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "5RZDF_f109_3",
+                "returnName": "5日涨跌幅",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f109",
+                "returnSourceName": "5日涨跌幅",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2",
+                "unitName": "%",
+                "unitDesc": "901:%:%"
+              },
+              {
+                "returnCode": "CJL_f5_3",
+                "returnName": "成交量",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "fixedParamValue": "volt=1",
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f5",
+                "returnSourceName": "成交量",
+                "graph": "1",
+                "unit": "1",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "ZGJ_f15_3",
+                "returnName": "最高价",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f15",
+                "returnSourceName": "最高价",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "KPJ_f17_3",
+                "returnName": "开盘价",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f17",
+                "returnSourceName": "开盘价",
+                "graph": "0",
+                "unit": "0",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "SFZT_f500_3",
+                "returnName": "是否涨停",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f500",
+                "returnSourceName": "是否涨停",
+                "graph": "0",
+                "unit": "0",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "HSL_f8_3",
+                "returnName": "换手率",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f8",
+                "returnSourceName": "换手率",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2",
+                "unitName": "%",
+                "unitDesc": "901:%:%"
+              },
+              {
+                "returnCode": "JJ_f352_3",
+                "returnName": "均价",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f352",
+                "returnSourceName": "均价",
+                "graph": "2",
+                "unit": "0",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "DRDDY_f89_3",
+                "returnName": "当日DDY",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f89",
+                "returnSourceName": "当日DDY",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "DRDDZ_f90_3",
+                "returnName": "当日DDZ",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f90",
+                "returnSourceName": "当日DDZ",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2"
+              },
+              {
+                "returnCode": "DRDDX_f88_3",
+                "returnName": "当日DDX",
+                "classCode": "007001",
+                "checkedRelatedIndicators": true,
+                "startDate": "2026-03-30 00:00:00",
+                "endDate": "2026-03-30 00:00:00",
+                "fuzzy": false,
+                "defineType": 0,
+                "isLoopN": false,
+                "apiCode": "3",
+                "isGroup": false,
+                "returnSourceCode": "f88",
+                "returnSourceName": "当日DDX",
+                "graph": "2",
+                "unit": "1",
+                "tableType": "2"
+              }
+            ],
+            "dataTableType": "NORM_TABLE",
+            "rowInfo": {},
+            "colInfo": {},
+            "indicatorOrder": [
+              "f3",
+              "f109",
+              "f6",
+              "f5",
+              "f17",
+              "f15",
+              "f2",
+              "f352",
+              "f16",
+              "f8",
+              "f7",
+              "f500",
+              "f501",
+              "f88",
+              "f89",
+              "f90"
+            ],
+            "tipFlags": [
+              "0"
+            ],
+            "dataType": "行情数据",
+            "title": "贵州茅台(600519.SH)当前的涨跌幅、5日涨跌幅等",
+            "hasThumbnail": true,
+            "indicatorLimited": false,
+            "dataPositionEnum": "MetricLeftTimeTop",
+            "orderCol": {},
+            "jumpUrlList": [],
+            "dataTypeEnum": "HQ",
+            "dateRuleSet": [],
+            "freqConvert": false,
+            "deleteInfo": [],
+            "macroCodeMap": {},
+            "entityTagDTO": {
+              "entityId": "1000002162",
+              "entityType": "SEC",
+              "entityTypeCode": "058001001",
+              "entityTypeName": "A股",
+              "classCode": "002001",
+              "className": "沪深京股票",
+              "publishCode": "",
+              "fullName": "贵州茅台",
+              "shortName": "",
+              "secuCode": "600519",
+              "market": "1",
+              "marketChar": ".SH",
+              "correct": false,
+              "securityName": "贵州茅台",
+              "hasKLine": false,
+              "valuation": false
+            },
+            "entityTagDTOList": [
+              {
+                "entityId": "1000002162",
+                "entityType": "SEC",
+                "entityTypeCode": "058001001",
+                "entityTypeName": "A股",
+                "classCode": "002001",
+                "className": "沪深京股票",
+                "publishCode": "",
+                "fullName": "贵州茅台",
+                "shortName": "",
+                "secuCode": "600519",
+                "market": "1",
+                "marketChar": ".SH",
+                "correct": false,
+                "securityName": "贵州茅台",
+                "hasKLine": true,
+                "valuation": false
+              }
+            ],
+            "indexTable": false,
+            "edbThirdData": false,
+            "dataUpdate": {
+              "2026-03-30 17:25": false
+            },
+            "supportsTimeSeries": false,
+            "estimatedTokens": 0,
+            "summaryTips": {
+              "periodicalReport": null
+            },
+            "nestEntityListMap": {},
+            "excelTimeTruncate": false,
+            "frontendEntityName": "",
+            "frontendEntityCode": "",
+            "frontendTitle": "",
+            "frontendDesc": "",
+            "indicatorCount": 0,
+            "fieldParameterStr": "",
+            "tdayEnum": "NORMAL"
+          }
+        ],
+        "condition": {
+          "search_data_task_0": [
+            "贵州茅台",
+            "支撑位压力位是否涨停涨跌幅5日涨跌幅成交额成交量开盘价最高价最新价均价最低价换手率振幅是否跌停当日DDX当日DDY当日DDZ",
+            "2026-03-30至2026-03-30"
+          ]
+        },
+        "entityTagDTOList": [
+          {
+            "entityId": "1000002162",
+            "entityType": "SEC",
+            "entityTypeCode": "058001001",
+            "entityTypeName": "A股",
+            "classCode": "002001",
+            "className": "沪深京股票",
+            "publishCode": "",
+            "fullName": "贵州茅台",
+            "shortName": "",
+            "secuCode": "600519",
+            "market": "1",
+            "marketChar": ".SH",
+            "correct": false,
+            "securityName": "贵州茅台",
+            "hasKLine": false,
+            "valuation": false
+          }
+        ]
+      },
+      "entityName": null,
+      "message": null,
+      "tableTruncated": false
+    },
+    "stack": null
+  },
+  "requestId": "06d712d2d7894e40b54100da7f7fd905"
+}

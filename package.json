@@ -1,0 +1,19 @@
+{
+  "name": "stock-analyzer",
+  "version": "1.0.0",
+  "description": "A股智能分析系统 - 真实数据版",
+  "main": "server.js",
+  "scripts": {
+    "start": "python3 server_akshare.py",
+    "dev": "python3 server_akshare.py"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "axios": "^1.6.0",
+    "chart.js": "^4.5.0"
+  },
+  "keywords": ["stock", "analysis", "a-share"],
+  "author": "",
+  "license": "MIT"
+}

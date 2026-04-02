@@ -1,0 +1,8 @@
+flask
+flask-cors
+requests
+akshare
+pandas
+qrcode[pil]
+pillow
+gunicorn

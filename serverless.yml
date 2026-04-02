@@ -1,0 +1,34 @@
+# 腾讯云 Serverless 配置
+# 文档: https://cloud.tencent.com/document/product/583
+
+service: stock-analyzer
+
+provider:
+  name: tencent
+  region: ap-guangzhou
+  runtime: Python3.9
+  credentials: ~/.serverless/tencent.yaml
+
+functions:
+  stock-api:
+    handler: serverless_handler.main
+    memorySize: 1024
+    timeout: 30
+    events:
+      - apigw:
+          name: stock-api-gateway
+          parameters:
+            protocols:
+              - http
+              - https
+            serviceName: stock-analyzer
+            description: 股票分析API
+            environment: release
+            endpoints:
+              - path: /
+                method: ANY
+              - path: /{proxy+}
+                method: ANY
+
+plugins:
+  - serverless-tencent-scf
