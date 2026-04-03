@@ -521,71 +521,85 @@ def deduplicate_news(news_list):
 
 def generate_financial_news():
     """
-    使用AkShare获取真实的财经新闻
+    使用 Yahoo Finance 获取真实的财经新闻
     """
     try:
-        import akshare as ak
+        import yfinance as yf
         import time
+        from datetime import datetime
         
-        print(f'   📰 尝试获取总体财经新闻...')
+        print(f'   📰 尝试获取 Yahoo Finance 财经新闻...')
         
         news_list = []
         
         try:
-            time.sleep(0.3)
+            # 使用 Yahoo Finance 获取新闻
+            print(f'      调用 Yahoo Finance 新闻接口...')
             
-            # 使用 AkShare 的新闻接口获取新闻
-            print(f'      调用 AkShare 新闻接口...')
-            
-            # 尝试获取多个股票的新闻，增加多样性
-            symbols_to_try = ['000001', '600519', '000002', '601318', '300750']
+            # 尝试获取多个热门股票的新闻，增加多样性
+            # 包括美股、中概股等
+            symbols_to_try = ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN', 'BABA', 'JD', 'PDD']
             all_news = []
             
             for symbol in symbols_to_try:
                 try:
-                    df_news = ak.stock_news_em(symbol=symbol)
-                    if df_news is not None and len(df_news) > 0:
-                        for idx, row in df_news.head(5).iterrows():
-                            news_title = str(row.get('新闻标题', ''))
-                            news_time = str(row.get('发布时间', ''))
-                            news_source = str(row.get('新闻来源', '东方财富'))
+                    stock = yf.Ticker(symbol)
+                    news = stock.news
+                    
+                    if news and len(news) > 0:
+                        for item in news[:3]:  # 每个股票取 3 条新闻
+                            news_title = item.get('title', '')
+                            news_publisher = item.get('publisher', 'Yahoo Finance')
+                            news_link = item.get('link', '')
+                            news_timestamp = item.get('providerPublishTime', 0)
                             
-                            if not news_title or news_title == 'nan':
+                            if not news_title:
                                 continue
                             
-                            # 自动分类新闻
+                            # 转换时间戳为可读格式
+                            time_display = '刚刚'
+                            if news_timestamp:
+                                news_time = datetime.fromtimestamp(news_timestamp)
+                                time_diff = datetime.now() - news_time
+                                if time_diff.days > 0:
+                                    time_display = f"{time_diff.days}天前"
+                                elif time_diff.seconds > 3600:
+                                    time_display = f"{time_diff.seconds // 3600}小时前"
+                                elif time_diff.seconds > 60:
+                                    time_display = f"{time_diff.seconds // 60}分钟前"
+                                else:
+                                    time_display = '刚刚'
+                            
+                            # 自动分类新闻（英文关键词）
                             category = 'market'
-                            impact = 'neutral'
-                            
-                            if '央行' in news_title or '政策' in news_title or '降准' in news_title or '降息' in news_title:
+                            if 'Fed' in news_title or 'policy' in news_title.lower() or 'interest rate' in news_title.lower():
                                 category = 'policy'
-                            elif '石油' in news_title or '原油' in news_title or '商品' in news_title:
+                            elif 'oil' in news_title.lower() or 'commodity' in news_title.lower() or 'gold' in news_title.lower():
                                 category = 'commodity'
-                            elif '行业' in news_title or '板块' in news_title:
+                            elif 'sector' in news_title.lower() or 'industry' in news_title.lower():
                                 category = 'industry'
-                            elif '美股' in news_title or '国际' in news_title or '全球' in news_title:
+                            elif 'global' in news_title.lower() or 'international' in news_title.lower():
                                 category = 'global'
-                            elif '汇率' in news_title or '人民币' in news_title or '美元' in news_title:
+                            elif 'currency' in news_title.lower() or 'dollar' in news_title.lower() or 'forex' in news_title.lower():
                                 category = 'forex'
+                            elif 'tech' in news_title.lower() or 'technology' in news_title.lower():
+                                category = 'technology'
                             
-                            # 判断影响
-                            positive_keywords = ['上涨', '利好', '增长', '突破', '创新高', '增持', '回购']
-                            negative_keywords = ['下跌', '利空', '亏损', '减持', '风险', '警告', '跌停']
+                            # 判断影响（英文关键词）
+                            impact = 'neutral'
+                            positive_keywords = ['rise', 'gain', 'growth', 'beat', 'surge', 'rally', 'upgrade', 'buy']
+                            negative_keywords = ['fall', 'drop', 'loss', 'miss', 'plunge', 'downgrade', 'sell', 'risk']
                             
+                            title_lower = news_title.lower()
                             for keyword in positive_keywords:
-                                if keyword in news_title:
+                                if keyword in title_lower:
                                     impact = 'positive'
                                     break
                             
                             for keyword in negative_keywords:
-                                if keyword in news_title:
+                                if keyword in title_lower:
                                     impact = 'negative'
                                     break
-                            
-                            # 格式化时间
-                            time_display = '刚刚'
-                            if news_time and news_time != 'nan':
-                                time_display = news_time
                             
                             all_news.append({
                                 'id': random.randint(1000, 9999),
@@ -593,9 +607,11 @@ def generate_financial_news():
                                 'category': category,
                                 'time': time_display,
                                 'impact': impact,
-                                'source': news_source
+                                'source': news_publisher,
+                                'link': news_link
                             })
-                except:
+                except Exception as e:
+                    print(f'      ⚠️  获取 {symbol} 新闻失败：{e}')
                     continue
             
             if len(all_news) > 0:
@@ -608,16 +624,16 @@ def generate_financial_news():
                 return deduplicated[:10]
             
             # 如果上面失败，使用备用方案
-            print(f'      🔄 尝试获取其他新闻源...')
+            print(f'      🔄 使用备用新闻源...')
             
             # 备用方案：生成一些基于市场的新闻
             backup_news = [
-                {'title': 'A股市场今日震荡整理，关注板块轮动', 'category': 'market', 'time': '刚刚', 'impact': 'neutral', 'source': '市场观察'},
-                {'title': '央行最新货币政策解读', 'category': 'policy', 'time': '30分钟前', 'impact': 'positive', 'source': '财经评论'},
-                {'title': '大宗商品价格走势分析', 'category': 'commodity', 'time': '1小时前', 'impact': 'neutral', 'source': '商品研究'},
-                {'title': '重点行业最新动态跟踪', 'category': 'industry', 'time': '2小时前', 'impact': 'neutral', 'source': '行业报告'},
-                {'title': '全球市场要闻速递', 'category': 'global', 'time': '3小时前', 'impact': 'neutral', 'source': '全球财经'},
-                {'title': '外汇市场最新行情', 'category': 'forex', 'time': '4小时前', 'impact': 'neutral', 'source': '外汇资讯'},
+                {'title': 'Stock Market Updates: Major Indices Mixed', 'category': 'market', 'time': '刚刚', 'impact': 'neutral', 'source': 'Market Watch'},
+                {'title': 'Fed Policy Decision Awaited by Investors', 'category': 'policy', 'time': '30 分钟前', 'impact': 'neutral', 'source': 'Financial Times'},
+                {'title': 'Oil Prices Fluctuate Amid Global Demand Concerns', 'category': 'commodity', 'time': '1 小时前', 'impact': 'negative', 'source': 'Reuters'},
+                {'title': 'Tech Sector Shows Strong Growth Potential', 'category': 'technology', 'time': '2 小时前', 'impact': 'positive', 'source': 'Bloomberg'},
+                {'title': 'Global Markets React to Economic Data', 'category': 'global', 'time': '3 小时前', 'impact': 'neutral', 'source': 'CNBC'},
+                {'title': 'Dollar Strengthens Against Major Currencies', 'category': 'forex', 'time': '4 小时前', 'impact': 'neutral', 'source': 'Forex Live'},
             ]
             
             backup_news = deduplicate_news(backup_news)
@@ -631,19 +647,19 @@ def generate_financial_news():
             return news_list
         
         except Exception as e:
-            print(f'      ⚠️  获取新闻失败: {e}')
+            print(f'      ⚠️  获取新闻失败：{e}')
             import traceback
             traceback.print_exc()
         
         # 如果所有方法都失败，使用默认新闻
         print(f'      🔄 使用默认新闻')
         default_news = [
-            {'title': '上证指数最新行情分析', 'category': 'market', 'time': '刚刚', 'impact': 'neutral', 'source': '市场分析'},
-            {'title': '宏观经济政策解读', 'category': 'policy', 'time': '30分钟前', 'impact': 'neutral', 'source': '政策解读'},
-            {'title': '大宗商品市场观察', 'category': 'commodity', 'time': '1小时前', 'impact': 'neutral', 'source': '商品观察'},
-            {'title': '行业发展趋势报告', 'category': 'industry', 'time': '2小时前', 'impact': 'neutral', 'source': '行业研究'},
-            {'title': '全球金融市场动态', 'category': 'global', 'time': '3小时前', 'impact': 'neutral', 'source': '全球财经'},
-            {'title': '外汇市场走势分析', 'category': 'forex', 'time': '4小时前', 'impact': 'neutral', 'source': '外汇分析'},
+            {'title': 'Market Analysis: Stocks Trend Higher', 'category': 'market', 'time': '刚刚', 'impact': 'positive', 'source': 'Market Analysis'},
+            {'title': 'Economic Policy Update and Outlook', 'category': 'policy', 'time': '30 分钟前', 'impact': 'neutral', 'source': 'Policy Watch'},
+            {'title': 'Commodity Markets Show Mixed Signals', 'category': 'commodity', 'time': '1 小时前', 'impact': 'neutral', 'source': 'Commodity Report'},
+            {'title': 'Industry Trends and Investment Opportunities', 'category': 'industry', 'time': '2 小时前', 'impact': 'positive', 'source': 'Industry Report'},
+            {'title': 'Global Finance: Key Developments', 'category': 'global', 'time': '3 小时前', 'impact': 'neutral', 'source': 'Global Finance'},
+            {'title': 'Currency Markets: Weekly Roundup', 'category': 'forex', 'time': '4 小时前', 'impact': 'neutral', 'source': 'Forex Analysis'},
         ]
         
         default_news = deduplicate_news(default_news)
@@ -653,15 +669,16 @@ def generate_financial_news():
         return default_news
         
     except Exception as e:
-        print(f'      ❌ 获取财经新闻失败: {e}')
+        print(f'      ❌ 获取财经新闻失败：{e}')
         import traceback
         traceback.print_exc()
         # 最基本的备用新闻
         basic_news = [
-            {'id': 1001, 'title': '市场最新动态', 'category': 'market', 'time': '刚刚', 'impact': 'neutral', 'source': '市场快讯', 'detail': '市场最新动态详情'},
-            {'id': 1002, 'title': '财经要闻速递', 'category': 'policy', 'time': '30分钟前', 'impact': 'neutral', 'source': '财经资讯', 'detail': '财经要闻速递详情'},
+            {'id': 1001, 'title': 'Market Latest Updates', 'category': 'market', 'time': '刚刚', 'impact': 'neutral', 'source': 'Market News', 'detail': 'Latest market updates and analysis'},
+            {'id': 1002, 'title': 'Financial News Brief', 'category': 'policy', 'time': '30 分钟前', 'impact': 'neutral', 'source': 'Finance News', 'detail': 'Key financial news and updates'},
         ]
         return basic_news
+
 
 @app.route('/api/news')
 def get_financial_news():
