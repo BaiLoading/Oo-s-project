@@ -4,7 +4,8 @@ services:
   stock-analyzer:
     build: .
     ports:
-      - "3000:3000"
+      - "80:3000"
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+      - PORT=3000

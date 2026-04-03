@@ -1,0 +1,14 @@
+{
+  "AWSEBDockerrunVersion": "1",
+  "Image": {
+    "Name": "stock-analyzer",
+    "Update": "true"
+  },
+  "Ports": [
+    {
+      "ContainerPort": "3000",
+      "HostPort": "80"
+    }
+  ],
+  "Command": "python server_akshare.py"
+}
