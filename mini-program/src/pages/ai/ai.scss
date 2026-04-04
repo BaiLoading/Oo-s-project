@@ -1,0 +1,36 @@
+.ai-container {
+  padding: 30rpx;
+  background-color: #f0f2f5;
+  min-height: 100vh;
+
+  .header {
+    margin-bottom: 30rpx;
+    .title { font-size: 40rpx; font-weight: bold; display: block; }
+    .subtitle { font-size: 24rpx; color: #666; display: block; }
+  }
+
+  .stock-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #fff;
+    padding: 30rpx;
+    border-radius: 20rpx;
+    margin-bottom: 30rpx;
+    .stock-code { font-size: 32rpx; font-weight: bold; }
+    .refresh-btn { margin: 0; font-size: 24rpx; background: #1890ff; color: #fff; border-radius: 40rpx; }
+  }
+
+  .analysis-card {
+    background: #fff;
+    padding: 30rpx;
+    border-radius: 20rpx;
+    min-height: 600rpx;
+    .card-title { font-size: 30rpx; font-weight: bold; margin-bottom: 20rpx; display: block; }
+    .analysis-text { font-size: 28rpx; line-height: 1.8; color: #333; }
+    .loading-box { display: flex; align-items: center; justify-content: center; height: 400rpx; }
+    .loading-text { font-size: 26rpx; color: #999; }
+  }
+
+  .disclaimer { margin-top: 40rpx; font-size: 22rpx; color: #999; text-align: center; }
+}

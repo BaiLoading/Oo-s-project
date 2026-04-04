@@ -21,27 +21,19 @@ export default defineAppConfig({
     list: [
       {
         pagePath: 'pages/index/index',
-        text: '首页',
-        iconPath: './assets/home.png',
-        selectedIconPath: './assets/home-active.png'
+        text: '首页'
       },
       {
         pagePath: 'pages/news/news',
-        text: '新闻',
-        iconPath: './assets/news.png',
-        selectedIconPath: './assets/news-active.png'
+        text: '新闻'
       },
       {
         pagePath: 'pages/ai/ai',
-        text: 'AI决策',
-        iconPath: './assets/ai.png',
-        selectedIconPath: './assets/ai-active.png'
+        text: 'AI决策'
       },
       {
         pagePath: 'pages/portfolio/portfolio',
-        text: '持仓',
-        iconPath: './assets/portfolio.png',
-        selectedIconPath: './assets/portfolio-active.png'
+        text: '持仓'
       }
     ]
   }

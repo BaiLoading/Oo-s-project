@@ -1,0 +1,146 @@
+.analysis-container {
+  padding: 30rpx;
+  background-color: #f5f7fa;
+  min-height: 100vh;
+
+  .loading, .empty {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 500rpx;
+    color: #999;
+    font-size: 28rpx;
+  }
+
+  .header {
+    margin-bottom: 30rpx;
+    .title { font-size: 36rpx; font-weight: bold; color: #1a1a1a; display: block; }
+    .subtitle { font-size: 24rpx; color: #888; display: block; margin-top: 8rpx; }
+  }
+
+  .card {
+    background-color: #fff;
+    border-radius: 16rpx;
+    padding: 24rpx;
+    margin-bottom: 24rpx;
+    box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.06);
+
+    .card-title { font-size: 28rpx; font-weight: bold; color: #1a1a1a; display: block; margin-bottom: 16rpx; }
+  }
+
+  /* 行情卡片 */
+  .quote-card {
+    .price-row {
+      display: flex;
+      align-items: baseline;
+      .price { font-size: 48rpx; font-weight: bold; color: #1a1a1a; }
+      .change { font-size: 28rpx; margin-left: 20rpx; &.up { color: #eb4436; } &.down { color: #00a854; } }
+    }
+  }
+
+  /* 指标通用样式 */
+  .indicator-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16rpx;
+    .indicator-name { font-size: 28rpx; font-weight: 600; color: #333; }
+    .indicator-value { font-size: 32rpx; font-weight: bold; }
+  }
+
+  .indicator-bar {
+    margin-bottom: 12rpx;
+    .bar-bg {
+      height: 12rpx;
+      background: linear-gradient(to right, #00a854 0%, #00a854 30%, #f5f7fa 30%, #f5f7fa 70%, #eb4436 70%, #eb4436 100%);
+      border-radius: 6rpx;
+      position: relative;
+      .bar-fill { height: 100%; border-radius: 6rpx; opacity: 0.7; }
+    }
+    .bar-markers {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4rpx;
+      .marker { font-size: 20rpx; color: #999; }
+    }
+  }
+
+  .signal-tag {
+    display: inline-block;
+    padding: 6rpx 16rpx;
+    border-radius: 20rpx;
+    font-size: 22rpx;
+    color: #fff;
+    font-weight: 500;
+  }
+
+  /* MACD 样式 */
+  .macd-values, .kdj-values, .ema-values {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 16rpx;
+    .macd-item, .kdj-item, .ema-item {
+      flex: 1;
+      text-align: center;
+      .label { font-size: 22rpx; color: #888; display: block; margin-bottom: 4rpx; }
+      .value { font-size: 28rpx; font-weight: 600; color: #333; &.up { color: #eb4436; } &.down { color: #00a854; } &.special { color: #1890ff; font-weight: bold; } }
+    }
+  }
+
+  /* KDJ 样式 */
+  .kdj-values {
+    .kdj-item .value {
+      &.special { color: #1890ff; }
+    }
+  }
+
+  /* 布林带样式 */
+  .bb-values {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 16rpx;
+    .bb-item {
+      flex: 1;
+      text-align: center;
+      .label { font-size: 22rpx; color: #888; display: block; margin-bottom: 4rpx; }
+      .value { font-size: 28rpx; font-weight: 600; &.up { color: #eb4436; } &.down { color: #00a854; } }
+    }
+  }
+
+  .position-bar {
+    .position-track {
+      height: 8rpx;
+      background: #eee;
+      border-radius: 4rpx;
+      overflow: hidden;
+      .position-fill { height: 100%; border-radius: 4rpx; }
+    }
+    .position-label { font-size: 22rpx; color: #888; margin-top: 8rpx; display: block; }
+  }
+
+  /* ADX 样式 */
+  .adx-level {
+    .level {
+      font-size: 26rpx;
+      &.strong { color: #00a854; }
+      &.weak { color: #888; }
+    }
+  }
+
+  /* 综合建议 */
+  .summary-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    .card-title { color: #fff; }
+    
+    .summary-list {
+      .summary-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12rpx;
+        color: #fff;
+        font-size: 26rpx;
+        .dot { width: 12rpx; height: 12rpx; border-radius: 50%; margin-right: 12rpx; }
+      }
+    }
+  }
+}
