@@ -29,3 +29,12 @@ node_modules/
 # 配置文件（包含敏感信息）
 config.py
 .env
+
+# OpenBB / 本地数据目录
+.openbb_platform/
+OpenBBUserData/
+Library/
+
+# 运行时生成的数据文件
+user_memory.json
+investment_strategies.json

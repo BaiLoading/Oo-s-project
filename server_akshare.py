@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime, timedelta
 import time
+import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -191,6 +192,255 @@ def parse_number(value):
 
 AKSHARE_CACHE = {}
 AKSHARE_CACHE_TTL_SECONDS = 120
+
+OPENBB_API_BASE_URL = os.environ.get('OPENBB_API_BASE_URL', 'http://127.0.0.1:6900').rstrip('/')
+OPENBB_CACHE = {}
+OPENBB_CACHE_TTL_SECONDS = {
+    'equity_historical': 600,
+    'equity_quote': 20,
+    'crypto_historical': 600
+}
+
+def _openbb_cache_get(key, ttl_seconds):
+    item = OPENBB_CACHE.get(key)
+    if not item:
+        return None
+    if time.time() - item.get('ts', 0) > ttl_seconds:
+        return None
+    return item.get('data')
+
+def _openbb_cache_set(key, data):
+    OPENBB_CACHE[key] = {'ts': time.time(), 'data': data}
+
+def _openbb_get(path, params, ttl_key=None):
+    url = f"{OPENBB_API_BASE_URL}{path}"
+    cache_key = (path, tuple(sorted((params or {}).items())))
+    if ttl_key:
+        cached = _openbb_cache_get(cache_key, OPENBB_CACHE_TTL_SECONDS.get(ttl_key, 0))
+        if cached is not None:
+            return cached
+    resp = requests.get(url, params=params, timeout=15)
+    if resp.status_code == 204:
+        return None
+    resp.raise_for_status()
+    data = resp.json()
+    if ttl_key:
+        _openbb_cache_set(cache_key, data)
+    return data
+
+def _openbb_get_with_fallback(path, base_params, providers, ttl_key):
+    errors = []
+    for provider in providers:
+        try:
+            params = dict(base_params or {})
+            params['provider'] = provider
+            data = _openbb_get(path, params, ttl_key=ttl_key)
+            if not data:
+                errors.append((provider, 'no content'))
+                continue
+            results = data.get('results')
+            if isinstance(results, list) and len(results) > 0:
+                return data, provider
+        except Exception as e:
+            errors.append((provider, str(e)))
+            continue
+    if errors:
+        detail = '; '.join([f"{p}: {m}" for p, m in errors[:6]])
+        raise Exception(f"数据源全部失败: {detail}")
+    return None, None
+
+def _normalize_date(value):
+    if not value:
+        return None
+    s = str(value)
+    if 'T' in s:
+        return s.split('T')[0]
+    if ' ' in s:
+        return s.split(' ')[0]
+    return s
+
+def _openbb_equity_data(symbol, market, days):
+    symbol = str(symbol).strip().upper()
+    if market == 'us':
+        providers_historical = ['yfinance', 'cboe', 'fmp', 'tiingo', 'polygon', 'intrinio', 'tmx', 'tradier', 'alpha_vantage']
+        providers_quote = ['yfinance', 'cboe', 'fmp', 'intrinio', 'tmx', 'tradier']
+    else:
+        providers_historical = ['yfinance', 'fmp', 'polygon', 'tiingo']
+        providers_quote = ['yfinance', 'fmp']
+    hist, hist_provider = _openbb_get_with_fallback(
+        '/api/v1/equity/price/historical',
+        {
+            'symbol': symbol,
+            'interval': '1d',
+            'sort': 'asc',
+            'limit': int(days) if int(days) > 0 else 365
+        },
+        providers_historical,
+        ttl_key='equity_historical'
+    )
+    quote, quote_provider = _openbb_get_with_fallback(
+        '/api/v1/equity/price/quote',
+        {
+            'symbol': symbol,
+            'use_cache': True
+        },
+        providers_quote,
+        ttl_key='equity_quote'
+    )
+    quote_row = (quote or {}).get('results', [{}])[0] if quote else {}
+    hist_rows = (hist or {}).get('results', []) if hist else []
+
+    kline = []
+    for row in hist_rows:
+        d = _normalize_date(row.get('date'))
+        close = row.get('close')
+        if d is None or close is None:
+            continue
+        kline.append({
+            'date': d,
+            'open': row.get('open') if row.get('open') is not None else close,
+            'high': row.get('high') if row.get('high') is not None else close,
+            'low': row.get('low') if row.get('low') is not None else close,
+            'close': close,
+            'volume': row.get('volume') if row.get('volume') is not None else 0
+        })
+
+    try:
+        if int(days) > 0 and len(kline) > int(days):
+            kline = kline[-int(days):]
+    except:
+        pass
+
+    last_bar = kline[-1] if kline else None
+    last_close = last_bar.get('close') if last_bar else None
+    last_volume = last_bar.get('volume') if last_bar else 0
+    last_open = last_bar.get('open') if last_bar else last_close
+    last_high = last_bar.get('high') if last_bar else last_close
+    last_low = last_bar.get('low') if last_bar else last_close
+
+    price = quote_row.get('last_price')
+    if price is None:
+        price = quote_row.get('close')
+    if price is None:
+        price = last_close
+
+    pre_close = quote_row.get('prev_close')
+    if pre_close is None and len(kline) >= 2:
+        pre_close = kline[-2].get('close')
+    if pre_close is None:
+        pre_close = price
+
+    change = quote_row.get('change')
+    if change is None and price is not None and pre_close is not None:
+        change = float(price) - float(pre_close)
+
+    volume = quote_row.get('volume')
+    if volume is None:
+        volume = last_volume
+
+    amount = None
+    try:
+        if volume is not None and price is not None:
+            amount = float(volume) * float(price)
+    except:
+        amount = None
+
+    provider_used = quote_provider or hist_provider
+    name = quote_row.get('name') or symbol
+
+    return {
+        'market': market,
+        'provider': provider_used,
+        'name': name,
+        'symbol': symbol,
+        'price': price,
+        'preClose': pre_close,
+        'change': change,
+        'open': quote_row.get('open', last_open),
+        'high': quote_row.get('high', last_high),
+        'low': quote_row.get('low', last_low),
+        'volume': volume,
+        'amount': amount,
+        'bid': quote_row.get('bid'),
+        'ask': quote_row.get('ask'),
+        'yearHigh': quote_row.get('year_high'),
+        'yearLow': quote_row.get('year_low'),
+        'currency': quote_row.get('currency'),
+        'timestamp': quote_row.get('last_timestamp'),
+        'data': kline
+    }
+
+def _openbb_crypto_data(symbol, days):
+    symbol = str(symbol).strip().upper()
+    providers = ['yfinance', 'fmp', 'polygon', 'tiingo']
+    hist, provider = _openbb_get_with_fallback(
+        '/api/v1/crypto/price/historical',
+        {
+            'symbol': symbol,
+            'interval': '1d',
+            'sort': 'asc',
+            'limit': int(days) if int(days) > 0 else 365
+        },
+        providers,
+        ttl_key='crypto_historical'
+    )
+    hist_rows = (hist or {}).get('results', []) if hist else []
+    kline = []
+    for row in hist_rows:
+        d = _normalize_date(row.get('date'))
+        close = row.get('close')
+        if d is None or close is None:
+            continue
+        kline.append({
+            'date': d,
+            'open': row.get('open') if row.get('open') is not None else close,
+            'high': row.get('high') if row.get('high') is not None else close,
+            'low': row.get('low') if row.get('low') is not None else close,
+            'close': close,
+            'volume': row.get('volume') if row.get('volume') is not None else 0
+        })
+
+    try:
+        if int(days) > 0 and len(kline) > int(days):
+            kline = kline[-int(days):]
+    except:
+        pass
+
+    last_bar = kline[-1] if kline else None
+    price = last_bar.get('close') if last_bar else None
+    pre_close = kline[-2].get('close') if len(kline) >= 2 else price
+    change = None
+    try:
+        if price is not None and pre_close is not None:
+            change = float(price) - float(pre_close)
+    except:
+        change = None
+
+    volume = last_bar.get('volume') if last_bar else 0
+    amount = None
+    try:
+        if volume is not None and price is not None:
+            amount = float(volume) * float(price)
+    except:
+        amount = None
+
+    return {
+        'market': 'crypto',
+        'provider': provider,
+        'name': symbol,
+        'symbol': symbol,
+        'price': price,
+        'preClose': pre_close,
+        'change': change,
+        'open': last_bar.get('open') if last_bar else price,
+        'high': last_bar.get('high') if last_bar else price,
+        'low': last_bar.get('low') if last_bar else price,
+        'volume': volume,
+        'amount': amount,
+        'currency': None,
+        'timestamp': last_bar.get('date') if last_bar else None,
+        'data': kline
+    }
 
 def get_complete_akshare_data(stock_code, days=365):
     try:
@@ -417,12 +667,27 @@ def get_stock_quote():
 @app.route('/api/stock/data')
 def get_stock_data():
     stock_code = request.args.get('code', '600519')
+    market = (request.args.get('market') or '').strip().lower()
     days = request.args.get('days', '')
     try:
         days = int(days) if days != '' else 365
     except:
         days = 365
     
+    if market in ['us', 'hk', 'crypto']:
+        try:
+            if market == 'crypto':
+                return jsonify(_openbb_crypto_data(stock_code, days=days))
+            return jsonify(_openbb_equity_data(stock_code, market=market, days=days))
+        except Exception as e:
+            return jsonify({'error': f'OpenBB数据获取失败: {str(e)}'}), 502
+
+    if market == '' and (not stock_code.isdigit() or len(stock_code) != 6):
+        try:
+            return jsonify(_openbb_equity_data(stock_code, market='us', days=days))
+        except Exception as e:
+            return jsonify({'error': f'OpenBB数据获取失败: {str(e)}'}), 502
+
     if stock_code.isdigit() and len(stock_code) == 6:
         ak_data = get_complete_akshare_data(stock_code, days=days)
         if ak_data:

@@ -14,8 +14,99 @@ let currentUsername = 'Ooking';
 let currentUserId = '1234';
 let pkList = [];
 
+const APP_SETTINGS_KEY = 'stock_app_settings_v1';
+
+function getDefaultAppSettings() {
+    return {
+        apiBaseUrl: '',
+        lastView: 'analysis',
+        sidebar: {
+            collapsed: false,
+            groups: {
+                stockAnalysis: false,
+                trading: false,
+                ai: false
+            }
+        },
+        ai: {
+            provider: 'backend',
+            apiKey: '',
+            baseUrl: 'https://api.openai.com/v1',
+            model: '',
+            maxTokens: 1024
+        }
+    };
+}
+
+function loadAppSettings() {
+    try {
+        const raw = localStorage.getItem(APP_SETTINGS_KEY);
+        if (!raw) return getDefaultAppSettings();
+        const parsed = JSON.parse(raw);
+        const defaults = getDefaultAppSettings();
+        return {
+            ...defaults,
+            ...parsed,
+            sidebar: {
+                ...defaults.sidebar,
+                ...(parsed.sidebar || {}),
+                groups: {
+                    ...defaults.sidebar.groups,
+                    ...((parsed.sidebar && parsed.sidebar.groups) || {})
+                }
+            },
+            ai: {
+                ...defaults.ai,
+                ...(parsed.ai || {})
+            }
+        };
+    } catch (e) {
+        return getDefaultAppSettings();
+    }
+}
+
+let appSettings = loadAppSettings();
+
+function persistAppSettings(next) {
+    appSettings = next;
+    localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(appSettings));
+}
+
+function normalizeBaseUrl(url) {
+    const value = (url || '').trim();
+    if (!value) return '';
+    return value.replace(/\/+$/, '');
+}
+
+function joinUrl(base, path) {
+    const b = normalizeBaseUrl(base);
+    const p = (path || '').trim();
+    if (!b) return p;
+    if (!p) return b;
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    if (p.startsWith('/')) return `${b}${p}`;
+    return `${b}/${p}`;
+}
+
+function apiFetch(path, options) {
+    const baseUrl = normalizeBaseUrl(appSettings.apiBaseUrl);
+    return fetch(joinUrl(baseUrl, path), options);
+}
+
+const __rawFetch = window.fetch.bind(window);
+window.fetch = function(input, init) {
+    try {
+        if (typeof input === 'string' && input.startsWith('/')) {
+            const baseUrl = normalizeBaseUrl(appSettings.apiBaseUrl);
+            return __rawFetch(joinUrl(baseUrl, input), init);
+        }
+    } catch (e) {}
+    return __rawFetch(input, init);
+};
+
 function toggleUserMenu() {
     const menu = document.getElementById('userMenu');
+    if (!menu) return;
     menu.classList.toggle('hidden');
 }
 
@@ -31,7 +122,7 @@ document.addEventListener('click', function(e) {
 
 function openEditUserModal() {
     const menu = document.getElementById('userMenu');
-    menu.classList.add('hidden');
+    if (menu) menu.classList.add('hidden');
     
     document.getElementById('editUsername').value = currentUsername;
     document.getElementById('editUserId').value = currentUserId;
@@ -54,7 +145,8 @@ function saveUserProfile() {
     localStorage.setItem('simUsername', currentUsername);
     localStorage.setItem('simUserId', currentUserId);
     
-    document.getElementById('displayUsername').textContent = currentUsername;
+    const displayUsername = document.getElementById('displayUsername');
+    if (displayUsername) displayUsername.textContent = currentUsername;
     
     const usernameInput = document.getElementById('username');
     if (usernameInput) {
@@ -74,7 +166,8 @@ window.addEventListener('load', function() {
     const savedUsername = localStorage.getItem('simUsername');
     if (savedUsername) {
         currentUsername = savedUsername;
-        document.getElementById('displayUsername').textContent = currentUsername;
+        const displayUsername = document.getElementById('displayUsername');
+        if (displayUsername) displayUsername.textContent = currentUsername;
     }
     
     const savedUserId = localStorage.getItem('simUserId');
@@ -811,10 +904,11 @@ function displayPrediction(data) {
     prediction.predictions.forEach(p => {
         const changeClass = p.change >= 0 ? 'bullish' : 'bearish';
         const changeSign = p.change >= 0 ? '+' : '';
+        const currencySymbol = window.currentCurrencySymbol || '¥';
         predHtml += `
             <div class="prediction-row">
                 <span>${p.date}</span>
-                <span>预测价: ¥${p.predictedPrice} <span class="${changeClass}">(${changeSign}${p.change}%)</span></span>
+                <span>预测价: ${currencySymbol}${p.predictedPrice} <span class="${changeClass}">(${changeSign}${p.change}%)</span></span>
             </div>
         `;
     });
@@ -850,7 +944,7 @@ async function analyzeStock() {
         let response, stockData, quote;
         
         if (stockType === 'cn') {
-            response = await fetch(`/api/stock/full?code=${stockCode}`);
+            response = await apiFetch(`/api/stock/full?code=${stockCode}`);
             if (!response.ok) {
                 let errMsg = `请求失败(${response.status})`;
                 try {
@@ -881,7 +975,7 @@ async function analyzeStock() {
             
             await loadEnhancedAnalysis(stockCode, quote, holdingsForStock, newsData, financialData);
         } else {
-            response = await fetch(`/api/stock/data?code=${stockCode}`);
+            response = await apiFetch(`/api/stock/data?code=${encodeURIComponent(stockCode)}&market=${encodeURIComponent(stockType)}`);
             if (!response.ok) {
                 let errMsg = `请求失败(${response.status})`;
                 try {
@@ -894,15 +988,23 @@ async function analyzeStock() {
             if (!data || !Array.isArray(data.data) || data.data.length < 2) {
                 throw new Error('接口返回数据不完整');
             }
+            const preClose = data.preClose != null ? data.preClose : (data.price - data.change);
             quote = {
-                name: data.name,
+                name: data.name || data.symbol || stockCode,
                 price: data.price,
-                preClose: data.price - data.change,
-                open: data.data.length > 0 ? data.data[0].open : data.price,
-                high: Math.max(...data.data.map(d => d.high)),
-                low: Math.min(...data.data.map(d => d.low)),
-                volume: data.volume,
-                amount: data.volume * data.price,
+                preClose: preClose,
+                open: data.open != null ? data.open : (data.data.length > 0 ? data.data[0].open : data.price),
+                high: data.high != null ? data.high : Math.max(...data.data.map(d => d.high)),
+                low: data.low != null ? data.low : Math.min(...data.data.map(d => d.low)),
+                volume: data.volume != null ? data.volume : 0,
+                amount: data.amount != null ? data.amount : ((data.volume != null && data.price != null) ? data.volume * data.price : null),
+                bid: data.bid,
+                ask: data.ask,
+                yearHigh: data.yearHigh,
+                yearLow: data.yearLow,
+                currency: data.currency,
+                provider: data.provider,
+                timestamp: data.timestamp,
                 isMock: false
             };
             stockData = data.data;
@@ -915,7 +1017,14 @@ async function analyzeStock() {
         const priceChangePercent = (priceChange / quote.preClose * 100).toFixed(2);
         const changeClass = priceChange >= 0 ? 'up' : 'down';
         const changeSign = priceChange >= 0 ? '+' : '';
-        const currencySymbol = stockType === 'cn' ? '¥' : '$';
+        const currencySymbol = stockType === 'cn'
+            ? '¥'
+            : (quote.currency === 'HKD' || stockType === 'hk')
+                ? 'HK$'
+                : (quote.currency === 'USD' || stockType === 'us' || stockType === 'crypto')
+                    ? '$'
+                    : '';
+        window.currentCurrencySymbol = currencySymbol;
         
         let displayName = quote.name;
         if (quote.isMock) {
@@ -934,8 +1043,24 @@ async function analyzeStock() {
         document.getElementById('openPrice').textContent = `${currencySymbol}${quote.open}`;
         document.getElementById('highPrice').textContent = `${currencySymbol}${quote.high}`;
         document.getElementById('lowPrice').textContent = `${currencySymbol}${quote.low}`;
-        document.getElementById('volume').textContent = (quote.volume / 1000000).toFixed(2) + 'M';
-        document.getElementById('amount').textContent = (quote.amount / 1000000000).toFixed(2) + 'B';
+        const preCloseEl = document.getElementById('preClosePrice');
+        if (preCloseEl) preCloseEl.textContent = `${currencySymbol}${quote.preClose}`;
+        document.getElementById('volume').textContent = quote.volume != null ? (quote.volume / 1000000).toFixed(2) + 'M' : '--';
+        document.getElementById('amount').textContent = quote.amount != null ? (quote.amount / 1000000000).toFixed(2) + 'B' : '--';
+        const bidAskEl = document.getElementById('bidAsk');
+        if (bidAskEl) {
+            const bid = quote.bid != null ? `${currencySymbol}${quote.bid}` : '--';
+            const ask = quote.ask != null ? `${currencySymbol}${quote.ask}` : '--';
+            bidAskEl.textContent = `${bid} / ${ask}`;
+        }
+        const yearRangeEl = document.getElementById('yearRange');
+        if (yearRangeEl) {
+            const high = quote.yearHigh != null ? `${currencySymbol}${quote.yearHigh}` : '--';
+            const low = quote.yearLow != null ? `${currencySymbol}${quote.yearLow}` : '--';
+            yearRangeEl.textContent = `${low} - ${high}`;
+        }
+        const providerEl = document.getElementById('dataProvider');
+        if (providerEl) providerEl.textContent = quote.provider || '--';
         
         if (typeof Chart !== 'undefined') {
             try {
@@ -964,7 +1089,7 @@ async function analyzeStock() {
 
 async function fetchRelatedNews(stockCode, stockName) {
     try {
-        const response = await fetch(`/api/stock/related-news?code=${stockCode}&name=${encodeURIComponent(stockName)}`);
+        const response = await apiFetch(`/api/stock/related-news?code=${stockCode}&name=${encodeURIComponent(stockName)}`);
         const data = await response.json();
         
         if (data.success && data.data) {
@@ -977,7 +1102,7 @@ async function fetchRelatedNews(stockCode, stockName) {
 
 async function fetchStockEvents(stockCode, stockName) {
     try {
-        const response = await fetch(`/api/stock/events?code=${stockCode}&name=${encodeURIComponent(stockName)}`);
+        const response = await apiFetch(`/api/stock/events?code=${stockCode}&name=${encodeURIComponent(stockName)}`);
         const data = await response.json();
         
         if (data.success && data.data) {
@@ -1060,7 +1185,7 @@ function toggleNewsDetail(newsId) {
 
 async function fetchFinancialData(stockCode, stockName) {
     try {
-        const response = await fetch(`/api/stock/financial?code=${stockCode}&name=${encodeURIComponent(stockName)}`);
+        const response = await apiFetch(`/api/stock/financial?code=${stockCode}&name=${encodeURIComponent(stockName)}`);
         const data = await response.json();
         
         if (data.success && data.data) {
@@ -1166,7 +1291,7 @@ function renderStockEvents(events) {
 
 async function loadEnhancedAnalysis(stockCode, quote, holdingsForStock, newsData = null, financialData = null) {
     try {
-        const response = await fetch('/api/enhanced/analysis', {
+        const response = await apiFetch('/api/enhanced/analysis', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1808,7 +1933,7 @@ async function loadStockPicker() {
     `;
     
     try {
-        const response = await fetch('/api/stock/picker');
+        const response = await apiFetch('/api/stock/picker');
         const result = await response.json();
         
         if (result.success && result.data) {
@@ -2656,7 +2781,8 @@ function setUsername() {
     
     currentUsername = username;
     localStorage.setItem('simUsername', username);
-    document.getElementById('displayUsername').textContent = username;
+    const displayUsername = document.getElementById('displayUsername');
+    if (displayUsername) displayUsername.textContent = username;
     alert(`用户名设置成功：${username}`);
 }
 
@@ -2797,7 +2923,7 @@ async function loadNews() {
             </div>
         `;
         
-        const response = await fetch('/api/news');
+        const response = await apiFetch('/api/news');
         const data = await response.json();
         
         if (data.success && data.data) {
@@ -2871,7 +2997,7 @@ async function getAIAnalysis() {
         
         const holdingsForStock = holdings.filter(h => h.code === stockCode);
         
-        const response = await fetch('/api/ai/analysis', {
+        const response = await apiFetch('/api/ai/analysis', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -3022,6 +3148,86 @@ function handleAIInputKeypress(event) {
     }
 }
 
+async function sendAIChatMessage(message) {
+    const provider = (appSettings.ai && appSettings.ai.provider) || 'backend';
+    if (provider === 'openai-chat') {
+        return await callOpenAiChat(message);
+    }
+    
+    const response = await apiFetch('/api/ai/chat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            message: message
+        })
+    });
+    
+    const result = await response.json();
+    if (result && result.success && result.reply) return result.reply;
+    throw new Error((result && result.error) || 'AI聊天失败');
+}
+
+async function callOpenAiChat(message) {
+    const apiKey = (appSettings.ai && appSettings.ai.apiKey) ? appSettings.ai.apiKey.trim() : '';
+    const baseUrl = normalizeBaseUrl(appSettings.ai && appSettings.ai.baseUrl);
+    const model = (appSettings.ai && appSettings.ai.model) ? appSettings.ai.model.trim() : '';
+    const maxTokens = Number(appSettings.ai && appSettings.ai.maxTokens) || 1024;
+    
+    if (!apiKey) throw new Error('AI API Key 未配置');
+    if (!baseUrl) throw new Error('AI Base URL 未配置');
+    if (!model) throw new Error('AI 模型名称未配置');
+    
+    const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : joinUrl(baseUrl, 'chat/completions');
+    
+    const systemPrompt = '你是股票智能助手。回答要简洁、可执行，必要时分点说明。';
+    
+    if (!Array.isArray(aiChatHistory)) aiChatHistory = [];
+    const history = aiChatHistory.slice(-12);
+    
+    const messages = [
+        { role: 'system', content: systemPrompt },
+        ...history,
+        { role: 'user', content: message }
+    ];
+    
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model,
+            messages,
+            max_tokens: maxTokens
+        })
+    });
+    
+    if (!response.ok) {
+        let errText = `请求失败(${response.status})`;
+        try {
+            const errData = await response.json();
+            const msg = errData && (errData.error?.message || errData.message);
+            if (msg) errText = msg;
+        } catch (e) {}
+        throw new Error(errText);
+    }
+    
+    const data = await response.json();
+    const reply = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    if (typeof reply !== 'string' || !reply.trim()) throw new Error('AI返回内容为空');
+    
+    aiChatHistory = [
+        ...history,
+        { role: 'user', content: message },
+        { role: 'assistant', content: reply }
+    ].slice(-12);
+    
+    return reply;
+}
+
 async function sendAIMessage() {
     const input = document.getElementById('aiChatInput');
     const message = input.value.trim();
@@ -3038,25 +3244,8 @@ async function sendAIMessage() {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     
     try {
-        // 调用AI接口（后端自动处理记忆）
-        const response = await fetch('/api/ai/chat', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                message: message
-            })
-        });
-        
-        const result = await response.json();
-        
-        if (result.success && result.reply) {
-            // 添加AI回复
-            addAIMessage(result.reply);
-        } else {
-            addAIMessage('抱歉，我暂时无法回答你的问题，请稍后再试。');
-        }
+        const reply = await sendAIChatMessage(message);
+        addAIMessage(reply || '抱歉，我暂时无法回答你的问题，请稍后再试。');
     } catch (error) {
         console.error('AI聊天失败:', error);
         addAIMessage('抱歉，网络错误，请稍后再试。');
@@ -3287,3 +3476,244 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    const nextCollapsed = !sidebar.classList.contains('collapsed');
+    sidebar.classList.toggle('collapsed', nextCollapsed);
+    persistAppSettings({
+        ...appSettings,
+        sidebar: {
+            ...appSettings.sidebar,
+            collapsed: nextCollapsed
+        }
+    });
+}
+
+function toggleSidebarGroup(groupKey) {
+    const submenu = document.querySelector(`[data-submenu="${groupKey}"]`);
+    const caret = document.querySelector(`[data-caret="${groupKey}"]`);
+    if (!submenu) return;
+    const nextCollapsed = !submenu.classList.contains('collapsed');
+    submenu.classList.toggle('collapsed', nextCollapsed);
+    if (caret) caret.textContent = nextCollapsed ? '▸' : '▾';
+    persistAppSettings({
+        ...appSettings,
+        sidebar: {
+            ...appSettings.sidebar,
+            groups: {
+                ...appSettings.sidebar.groups,
+                [groupKey]: nextCollapsed
+            }
+        }
+    });
+}
+
+function hideAllAppViews() {
+    const ids = [
+        'overviewSection',
+        'watchlistSection',
+        'backtestSection',
+        'settingsSection',
+        'analysisSection',
+        'newsSection',
+        'stockPickerSection',
+        'diarySection',
+        'myPortfolioSection',
+        'portfolioSection'
+    ];
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+    });
+}
+
+function setActiveSidebarItem(view) {
+    const items = document.querySelectorAll('.sidebar-item[data-view]');
+    items.forEach(item => item.classList.remove('active'));
+    const active = document.querySelector(`.sidebar-item[data-view="${view}"]`);
+    if (active) active.classList.add('active');
+}
+
+function expandGroupForView(view) {
+    const map = {
+        analysis: 'stockAnalysis',
+        news: 'stockAnalysis',
+        watchlist: 'stockAnalysis',
+        backtest: 'trading',
+        portfolio: 'trading',
+        myPortfolio: 'trading',
+        diary: 'trading',
+        stockPicker: 'ai'
+    };
+    const groupKey = map[view];
+    if (!groupKey) return;
+    const submenu = document.querySelector(`[data-submenu="${groupKey}"]`);
+    const caret = document.querySelector(`[data-caret="${groupKey}"]`);
+    if (!submenu) return;
+    submenu.classList.remove('collapsed');
+    if (caret) caret.textContent = '▾';
+    if (appSettings.sidebar && appSettings.sidebar.groups && appSettings.sidebar.groups[groupKey]) {
+        persistAppSettings({
+            ...appSettings,
+            sidebar: {
+                ...appSettings.sidebar,
+                groups: {
+                    ...appSettings.sidebar.groups,
+                    [groupKey]: false
+                }
+            }
+        });
+    }
+}
+
+function appNavigate(view) {
+    hideAllAppViews();
+    expandGroupForView(view);
+    setActiveSidebarItem(view);
+    persistAppSettings({ ...appSettings, lastView: view });
+    
+    if (view === 'overview') {
+        const el = document.getElementById('overviewSection');
+        if (el) el.classList.remove('hidden');
+        return;
+    }
+    
+    if (view === 'watchlist') {
+        const el = document.getElementById('watchlistSection');
+        if (el) el.classList.remove('hidden');
+        return;
+    }
+    
+    if (view === 'backtest') {
+        const el = document.getElementById('backtestSection');
+        if (el) el.classList.remove('hidden');
+        return;
+    }
+    
+    if (view === 'settings') {
+        const el = document.getElementById('settingsSection');
+        if (el) el.classList.remove('hidden');
+        populateSettingsUI();
+        return;
+    }
+    
+    if (typeof switchTab === 'function') {
+        switchTab(view);
+    }
+}
+
+function populateSettingsUI() {
+    const apiBaseUrlInput = document.getElementById('settingApiBaseUrl');
+    if (apiBaseUrlInput) apiBaseUrlInput.value = appSettings.apiBaseUrl || '';
+    
+    const providerSelect = document.getElementById('settingAiProvider');
+    if (providerSelect) providerSelect.value = (appSettings.ai && appSettings.ai.provider) || 'backend';
+    
+    const aiApiKey = document.getElementById('settingAiApiKey');
+    if (aiApiKey) aiApiKey.value = (appSettings.ai && appSettings.ai.apiKey) || '';
+    
+    const aiBaseUrl = document.getElementById('settingAiBaseUrl');
+    if (aiBaseUrl) aiBaseUrl.value = (appSettings.ai && appSettings.ai.baseUrl) || '';
+    
+    const aiModel = document.getElementById('settingAiModel');
+    if (aiModel) aiModel.value = (appSettings.ai && appSettings.ai.model) || '';
+    
+    const aiMaxTokens = document.getElementById('settingAiMaxTokens');
+    if (aiMaxTokens) aiMaxTokens.value = (appSettings.ai && appSettings.ai.maxTokens) || 1024;
+    
+    const hint = document.getElementById('aiTestHint');
+    if (hint) hint.textContent = '';
+}
+
+function saveAppSettingsFromUI() {
+    const apiBaseUrlInput = document.getElementById('settingApiBaseUrl');
+    const providerSelect = document.getElementById('settingAiProvider');
+    const aiApiKey = document.getElementById('settingAiApiKey');
+    const aiBaseUrl = document.getElementById('settingAiBaseUrl');
+    const aiModel = document.getElementById('settingAiModel');
+    const aiMaxTokens = document.getElementById('settingAiMaxTokens');
+    
+    const next = {
+        ...appSettings,
+        apiBaseUrl: apiBaseUrlInput ? apiBaseUrlInput.value.trim() : appSettings.apiBaseUrl,
+        ai: {
+            ...appSettings.ai,
+            provider: providerSelect ? providerSelect.value : appSettings.ai.provider,
+            apiKey: aiApiKey ? aiApiKey.value : appSettings.ai.apiKey,
+            baseUrl: aiBaseUrl ? aiBaseUrl.value.trim() : appSettings.ai.baseUrl,
+            model: aiModel ? aiModel.value.trim() : appSettings.ai.model,
+            maxTokens: aiMaxTokens ? Number(aiMaxTokens.value) || 1024 : appSettings.ai.maxTokens
+        }
+    };
+    
+    persistAppSettings(next);
+    populateSettingsUI();
+    alert('设置已保存');
+}
+
+function resetAppSettings() {
+    persistAppSettings(getDefaultAppSettings());
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.classList.remove('collapsed');
+    ['stockAnalysis', 'trading', 'ai'].forEach(groupKey => {
+        const submenu = document.querySelector(`[data-submenu="${groupKey}"]`);
+        const caret = document.querySelector(`[data-caret="${groupKey}"]`);
+        if (submenu) submenu.classList.remove('collapsed');
+        if (caret) caret.textContent = '▾';
+    });
+    populateSettingsUI();
+    alert('已恢复默认设置');
+}
+
+async function testAiChatConfig() {
+    const hint = document.getElementById('aiTestHint');
+    if (hint) hint.textContent = '测试中...';
+    
+    const providerSelect = document.getElementById('settingAiProvider');
+    const aiApiKey = document.getElementById('settingAiApiKey');
+    const aiBaseUrl = document.getElementById('settingAiBaseUrl');
+    const aiModel = document.getElementById('settingAiModel');
+    const aiMaxTokens = document.getElementById('settingAiMaxTokens');
+    
+    const tempSettings = {
+        ...appSettings,
+        ai: {
+            ...appSettings.ai,
+            provider: providerSelect ? providerSelect.value : appSettings.ai.provider,
+            apiKey: aiApiKey ? aiApiKey.value : appSettings.ai.apiKey,
+            baseUrl: aiBaseUrl ? aiBaseUrl.value.trim() : appSettings.ai.baseUrl,
+            model: aiModel ? aiModel.value.trim() : appSettings.ai.model,
+            maxTokens: aiMaxTokens ? Number(aiMaxTokens.value) || 256 : (appSettings.ai.maxTokens || 256)
+        }
+    };
+    
+    const prev = appSettings;
+    try {
+        appSettings = tempSettings;
+        const reply = await sendAIChatMessage('你好，请用一句话说明你是谁。');
+        if (hint) hint.textContent = `测试成功：${reply.slice(0, 80)}`;
+    } catch (e) {
+        if (hint) hint.textContent = `测试失败：${e && e.message ? e.message : '未知错误'}`;
+    } finally {
+        appSettings = prev;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar && appSettings.sidebar && appSettings.sidebar.collapsed) {
+        sidebar.classList.add('collapsed');
+    }
+    
+    ['stockAnalysis', 'trading', 'ai'].forEach(groupKey => {
+        const submenu = document.querySelector(`[data-submenu="${groupKey}"]`);
+        const caret = document.querySelector(`[data-caret="${groupKey}"]`);
+        const isCollapsed = appSettings.sidebar && appSettings.sidebar.groups && appSettings.sidebar.groups[groupKey];
+        if (submenu) submenu.classList.toggle('collapsed', !!isCollapsed);
+        if (caret) caret.textContent = isCollapsed ? '▸' : '▾';
+    });
+    
+    const initialView = (appSettings && appSettings.lastView) ? appSettings.lastView : 'analysis';
+    appNavigate(initialView);
+});

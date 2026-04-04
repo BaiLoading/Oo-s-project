@@ -8,37 +8,92 @@
     <script src="/vendor/chart.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header class="header">
-            <div class="header-content">
-                <div class="header-title">
-                    <h1>📈 股票智能伴侣</h1>
-                    <p class="subtitle">支持A股/美股 · 技术分析 · AI一键交易 · AI智能建议 · 模拟持仓</p>
-                </div>
-                <div class="user-profile" id="userProfile">
-                    <div class="user-avatar" onclick="toggleUserMenu()">
-                        <span class="avatar-icon">👤</span>
-                    </div>
-                    <div class="user-menu hidden" id="userMenu">
-                        <div class="user-info">
-                            <div class="user-name" id="displayUsername">Ooking</div>
-                            <div class="user-id">账号ID: 1234</div>
-                        </div>
-                        <div class="user-menu-divider"></div>
-                        <div class="user-menu-item" onclick="openEditUserModal()">
-                            <span>⚙️</span> 修改资料
-                        </div>
-                    </div>
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+                <div class="sidebar-brand">
+                    <div class="sidebar-title">股票智能分析</div>
+                    <div class="sidebar-subtitle">AkShare 数据源</div>
                 </div>
             </div>
-        </header>
+            <nav class="sidebar-nav">
+                <button class="sidebar-item active" data-view="overview" onclick="appNavigate('overview')">
+                    <span class="sidebar-item-icon">📌</span>
+                    <span class="sidebar-item-text">总览</span>
+                </button>
+                
+                <div class="sidebar-group">
+                    <button class="sidebar-item sidebar-item-parent" data-group="stockAnalysis" onclick="toggleSidebarGroup('stockAnalysis')">
+                        <span class="sidebar-item-icon">📈</span>
+                        <span class="sidebar-item-text">股票分析</span>
+                        <span class="sidebar-item-caret" data-caret="stockAnalysis">▾</span>
+                    </button>
+                    <div class="sidebar-submenu" data-submenu="stockAnalysis">
+                        <button class="sidebar-item sidebar-item-child" data-view="analysis" onclick="appNavigate('analysis')">
+                            <span class="sidebar-item-text">技术分析</span>
+                        </button>
+                        <button class="sidebar-item sidebar-item-child" data-view="news" onclick="appNavigate('news')">
+                            <span class="sidebar-item-text">财经新闻</span>
+                        </button>
+                        <button class="sidebar-item sidebar-item-child" data-view="watchlist" onclick="appNavigate('watchlist')">
+                            <span class="sidebar-item-text">自选管理</span>
+                        </button>
+                    </div>
+                </div>
 
+                <div class="sidebar-group">
+                    <button class="sidebar-item sidebar-item-parent" data-group="trading" onclick="toggleSidebarGroup('trading')">
+                        <span class="sidebar-item-icon">💹</span>
+                        <span class="sidebar-item-text">交易</span>
+                        <span class="sidebar-item-caret" data-caret="trading">▾</span>
+                    </button>
+                    <div class="sidebar-submenu" data-submenu="trading">
+                        <button class="sidebar-item sidebar-item-child" data-view="backtest" onclick="appNavigate('backtest')">
+                            <span class="sidebar-item-text">回测</span>
+                        </button>
+                        <button class="sidebar-item sidebar-item-child" data-view="portfolio" onclick="appNavigate('portfolio')">
+                            <span class="sidebar-item-text">模拟交易</span>
+                        </button>
+                        <button class="sidebar-item sidebar-item-child" data-view="myPortfolio" onclick="appNavigate('myPortfolio')">
+                            <span class="sidebar-item-text">我的持仓</span>
+                        </button>
+                        <button class="sidebar-item sidebar-item-child" data-view="diary" onclick="appNavigate('diary')">
+                            <span class="sidebar-item-text">交易日记</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="sidebar-group">
+                    <button class="sidebar-item sidebar-item-parent" data-group="ai" onclick="toggleSidebarGroup('ai')">
+                        <span class="sidebar-item-icon">🤖</span>
+                        <span class="sidebar-item-text">AI</span>
+                        <span class="sidebar-item-caret" data-caret="ai">▾</span>
+                    </button>
+                    <div class="sidebar-submenu" data-submenu="ai">
+                        <button class="sidebar-item sidebar-item-child" data-view="stockPicker" onclick="appNavigate('stockPicker')">
+                            <span class="sidebar-item-text">智能选股</span>
+                        </button>
+                    </div>
+                </div>
+
+                <button class="sidebar-item" data-view="settings" onclick="appNavigate('settings')">
+                    <span class="sidebar-item-icon">⚙️</span>
+                    <span class="sidebar-item-text">设置</span>
+                </button>
+            </nav>
+        </aside>
+
+        <main class="app-main" id="appMain">
+    <div class="container">
         <div class="search-section">
             <div class="search-box">
-                <input type="text" id="stockCode" placeholder="输入股票代码（如：600519 / AAPL）">
+                <input type="text" id="stockCode" placeholder="输入代码（如：600519 / AAPL / 0700.HK / BTC-USD）">
                 <select id="stockType">
                     <option value="cn">A股</option>
                     <option value="us">美股</option>
+                    <option value="hk">港股</option>
+                    <option value="crypto">加密货币</option>
                 </select>
                 <button id="analyzeBtn" onclick="analyzeStock()">开始分析</button>
             </div>
@@ -51,6 +106,88 @@
             <button class="nav-tab" onclick="switchTab('diary')">📝 交易日记</button>
             <button class="nav-tab" onclick="switchTab('myPortfolio')">💼 我的持仓</button>
             <button class="nav-tab" onclick="switchTab('portfolio')">📝 模拟持仓</button>
+        </div>
+
+        <div id="overviewSection" class="placeholder-section hidden">
+            <div class="placeholder-card">
+                <h2>总览</h2>
+                <p>预留位置：后续接入总览接口后在此展示关键指标、资金曲线、策略表现等。</p>
+            </div>
+        </div>
+
+        <div id="watchlistSection" class="placeholder-section hidden">
+            <div class="placeholder-card">
+                <h2>自选管理</h2>
+                <p>预留位置：后续接入自选股管理接口。</p>
+            </div>
+        </div>
+
+        <div id="backtestSection" class="placeholder-section hidden">
+            <div class="placeholder-card">
+                <h2>回测</h2>
+                <p>预留位置：后续接入回测接口与回测结果展示。</p>
+            </div>
+        </div>
+
+        <div id="settingsSection" class="settings-section hidden">
+            <div class="settings-header">
+                <h2>系统设置</h2>
+                <div class="settings-actions">
+                    <button class="btn-secondary" onclick="resetAppSettings()">恢复默认</button>
+                    <button class="btn-primary" onclick="saveAppSettingsFromUI()">保存设置</button>
+                </div>
+            </div>
+
+            <div class="settings-grid">
+                <div class="settings-card">
+                    <h3>后端 API</h3>
+                    <div class="form-group">
+                        <label>API Base URL</label>
+                        <input type="text" id="settingApiBaseUrl" placeholder="例如：http://localhost:3001（留空表示同源）">
+                    </div>
+                </div>
+
+                <div class="settings-card">
+                    <h3>模型配置</h3>
+                    <div class="form-group">
+                        <label>AI 模型提供商</label>
+                        <select id="settingAiProvider">
+                            <option value="backend">后端默认（/api/ai/chat）</option>
+                            <option value="openai-chat">OpenAI 兼容（/v1/chat/completions）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="settingAiApiKey" placeholder="仅保存在浏览器本地">
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL</label>
+                        <input type="text" id="settingAiBaseUrl" placeholder="例如：https://api.openai.com/v1">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>模型名称</label>
+                            <input type="text" id="settingAiModel" placeholder="例如：gpt-4o-mini">
+                        </div>
+                        <div class="form-group">
+                            <label>最大输出 Token</label>
+                            <input type="number" id="settingAiMaxTokens" placeholder="例如：1024">
+                        </div>
+                    </div>
+                    <button class="btn-secondary" onclick="testAiChatConfig()">测试聊天配置</button>
+                    <div class="settings-hint" id="aiTestHint"></div>
+                </div>
+
+                <div class="settings-card">
+                    <h3>财经新闻</h3>
+                    <div class="settings-note">该模块目前由后端统一提供新闻聚合（无需 Key）。</div>
+                </div>
+
+                <div class="settings-card">
+                    <h3>AkShare</h3>
+                    <div class="settings-note">该模块通过 AkShare 抓取行情数据（无需 Key）。</div>
+                </div>
+            </div>
         </div>
 
         <div id="analysisSection">
@@ -85,12 +222,28 @@
                         <span id="lowPrice" class="value">--</span>
                     </div>
                     <div class="meta-item">
+                        <span class="label">昨收</span>
+                        <span id="preClosePrice" class="value">--</span>
+                    </div>
+                    <div class="meta-item">
                         <span class="label">成交量</span>
                         <span id="volume" class="value">--</span>
                     </div>
                     <div class="meta-item">
                         <span class="label">成交额</span>
                         <span id="amount" class="value">--</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="label">买/卖</span>
+                        <span id="bidAsk" class="value">--</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="label">52周</span>
+                        <span id="yearRange" class="value">--</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="label">数据源</span>
+                        <span id="dataProvider" class="value">--</span>
                     </div>
                 </div>
             </div>
@@ -929,6 +1082,10 @@
             <input type="text" id="aiChatInput" placeholder="输入你的问题..." onkeypress="handleAIInputKeypress(event)">
             <button onclick="sendAIMessage()">发送</button>
         </div>
+    </div>
+
+    </div>
+        </main>
     </div>
 
     <script src="script.js"></script>
