@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>股票智能分析系统</title>
     <link rel="stylesheet" href="style.css">
-    <script src="/vendor/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="app-shell">
@@ -38,6 +38,9 @@
                         </button>
                         <button class="sidebar-item sidebar-item-child" data-view="watchlist" onclick="appNavigate('watchlist')">
                             <span class="sidebar-item-text">自选管理</span>
+                        </button>
+                        <button class="sidebar-item sidebar-item-child" data-view="finance" onclick="appNavigate('finance')">
+                            <span class="sidebar-item-text">🏦 公司财务</span>
                         </button>
                     </div>
                 </div>
@@ -106,6 +109,7 @@
             <button class="nav-tab active" onclick="switchTab('analysis')">📊 技术分析</button>
             <button class="nav-tab" onclick="switchTab('news')">📰 财经新闻</button>
             <button class="nav-tab" onclick="switchTab('stockPicker')">🎯 智能选股</button>
+            <button class="nav-tab" onclick="switchTab('finance')">🏦 公司财务</button>
             <button class="nav-tab" onclick="switchTab('diary')">📝 交易日记</button>
             <button class="nav-tab" onclick="switchTab('myPortfolio')">💼 我的持仓</button>
             <button class="nav-tab" onclick="switchTab('portfolio')">📝 模拟持仓</button>
@@ -329,6 +333,10 @@
                         <span id="yearRange" class="value">--</span>
                     </div>
                     <div class="meta-item">
+                        <span class="label">市盈率PE</span>
+                        <span id="peRatio" class="value">--</span>
+                    </div>
+                    <div class="meta-item">
                         <span class="label">数据源</span>
                         <span id="dataProvider" class="value">--</span>
                     </div>
@@ -338,6 +346,11 @@
             <div class="charts-section">
                 <div class="chart-container kline-chart">
                     <h3>K线图</h3>
+                    <div class="kline-controls">
+                        <button class="period-btn active" data-period="1d" onclick="switchKlinePeriod('1d')">日K</button>
+                        <button class="period-btn" data-period="1w" onclick="switchKlinePeriod('1w')">周K</button>
+                        <button class="period-btn" data-period="1M" onclick="switchKlinePeriod('1M')">月K</button>
+                    </div>
                     <canvas id="klineChart"></canvas>
                 </div>
                 <div class="indicators-row">
@@ -388,11 +401,56 @@
                 <div id="financialData" class="financial-content"></div>
             </div>
 
+            <div class="management-section">
+                <h3>👔 核心管理团队</h3>
+                <div id="managementData" class="management-content"></div>
+            </div>
+
             <div class="prediction-section">
                 <h3>🔮 智能预测与操作建议</h3>
                 <div id="prediction" class="prediction-content"></div>
             </div>
         </div>
+        </div>
+
+        <div id="financeSection" class="hidden">
+            <div class="finance-header">
+                <div class="finance-stock-info">
+                    <h2 id="financeStockName">--</h2>
+                    <span id="financeStockCode" class="stock-code">--</span>
+                </div>
+                <div class="finance-controls">
+                    <div class="finance-period-toggle">
+                        <button class="finance-period-btn active" data-period="annual" onclick="switchFinancePeriod('annual')">年度 FY</button>
+                        <button class="finance-period-btn" data-period="quarter" onclick="switchFinancePeriod('quarter')">季度 QTR</button>
+                    </div>
+                    <div class="finance-statement-tabs">
+                        <button class="finance-stmt-btn active" data-stmt="income" onclick="switchFinanceStatement('income')">利润表</button>
+                        <button class="finance-stmt-btn" data-stmt="balance" onclick="switchFinanceStatement('balance')">资产负债表</button>
+                        <button class="finance-stmt-btn" data-stmt="cash" onclick="switchFinanceStatement('cash')">现金流量表</button>
+                    </div>
+                    <div class="finance-actions">
+                        <button class="finance-action-btn" onclick="exportFinanceTable()" title="导出表格">📥</button>
+                        <button class="finance-action-btn" onclick="toggleFinanceFullscreen(this)" data-fullscreen-btn title="全屏">⛶</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="finance-loading" id="financeLoading">
+                <div class="spinner"></div>
+                <p>正在加载财务数据...</p>
+            </div>
+
+            <div class="finance-table-wrapper" id="financeTableWrapper">
+                <table class="finance-table" id="financeTable">
+                    <thead id="financeTableHead"></thead>
+                    <tbody id="financeTableBody"></tbody>
+                </table>
+            </div>
+
+            <div class="finance-empty" id="financeEmpty">
+                <p>🔍 在上方搜索股票后，即可查看财务报表</p>
+            </div>
         </div>
 
         <div id="newsSection" class="hidden">

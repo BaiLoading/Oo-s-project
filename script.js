@@ -1,6 +1,7 @@
 let klineChart = null;
 let macdChart = null;
 let rsiChart = null;
+let currentKlinePeriod = '1d';  // 当前K线周期: 1d=日K, 1w=周K, 1M=月K
 
 let aiChatHistory = [];
 
@@ -953,24 +954,29 @@ async function analyzeStock() {
     document.getElementById('result').classList.add('hidden');
     
     try {
-        let response, stockData, quote;
+        let stockData, quote;
         
-        if (stockType === 'cn') {
-            response = await apiFetch(`/api/stock/full?code=${stockCode}`);
-            if (!response.ok) {
-                let errMsg = `请求失败(${response.status})`;
-                try {
-                    const errData = await response.json();
-                    if (errData && errData.error) errMsg = errData.error;
-                } catch (e) {}
-                throw new Error(errMsg);
-            }
-            const data = await response.json();
-            if (!data || !data.quote || !Array.isArray(data.kline)) {
-                throw new Error('接口返回数据不完整');
-            }
-            quote = data.quote;
-            stockData = data.kline;
+        // 1) 行情快照（报价）
+        const quoteRes = await apiFetch(`/api/stock/full?code=${stockCode}`);
+        if (!quoteRes.ok) {
+            let errMsg = `请求失败(${quoteRes.status})`;
+            try { const e = await quoteRes.json(); if (e && e.error) errMsg = e.error; } catch (_) {}
+            throw new Error(errMsg);
+        }
+        const quoteData = await quoteRes.json();
+        if (!quoteData || !quoteData.quote) throw new Error('行情数据不完整');
+        quote = quoteData.quote;
+        
+        // 2) K线历史数据
+        const klineRes = await apiFetch(`/api/stock/kline?code=${stockCode}&interval=${currentKlinePeriod}`);
+        if (!klineRes.ok) {
+            let errMsg = `K线请求失败(${klineRes.status})`;
+            try { const e = await klineRes.json(); if (e && e.error) errMsg = e.error; } catch (_) {}
+            throw new Error(errMsg);
+        }
+        const klineData = await klineRes.json();
+        if (!klineData || !Array.isArray(klineData.kline)) throw new Error('K线数据不完整');
+        stockData = klineData.kline;
             
             const holdingsForStock = holdings.filter(h => h.code === stockCode);
             
@@ -985,48 +991,16 @@ async function analyzeStock() {
             window.currentNewsData = newsData;
             window.currentFinancialData = financialData;
             
+            // 获取管理团队数据
+            await fetchManagementData(stockCode);
+            
             await loadEnhancedAnalysis(stockCode, quote, holdingsForStock, newsData, financialData);
-        } else {
-            response = await apiFetch(`/api/stock/data?code=${encodeURIComponent(stockCode)}&market=${encodeURIComponent(stockType)}`);
-            if (!response.ok) {
-                let errMsg = `请求失败(${response.status})`;
-                try {
-                    const errData = await response.json();
-                    if (errData && errData.error) errMsg = errData.error;
-                } catch (e) {}
-                throw new Error(errMsg);
-            }
-            const data = await response.json();
-            if (!data || !Array.isArray(data.data) || data.data.length < 2) {
-                throw new Error('接口返回数据不完整');
-            }
-            const preClose = data.preClose != null ? data.preClose : (data.price - data.change);
-            quote = {
-                name: data.name || data.symbol || stockCode,
-                price: data.price,
-                preClose: preClose,
-                open: data.open != null ? data.open : (data.data.length > 0 ? data.data[0].open : data.price),
-                high: data.high != null ? data.high : Math.max(...data.data.map(d => d.high)),
-                low: data.low != null ? data.low : Math.min(...data.data.map(d => d.low)),
-                volume: data.volume != null ? data.volume : 0,
-                amount: data.amount != null ? data.amount : ((data.volume != null && data.price != null) ? data.volume * data.price : null),
-                bid: data.bid,
-                ask: data.ask,
-                yearHigh: data.yearHigh,
-                yearLow: data.yearLow,
-                currency: data.currency,
-                provider: data.provider,
-                timestamp: data.timestamp,
-                isMock: false
-            };
-            stockData = data.data;
-        }
         
         const latest = stockData[stockData.length - 1];
         const prev = stockData[stockData.length - 2];
         
-        const priceChange = quote.price - quote.preClose;
-        const priceChangePercent = (priceChange / quote.preClose * 100).toFixed(2);
+        const priceChange = quote.change != null ? parseFloat(quote.change) : (quote.price - parseFloat(quote.prevClose));
+        const priceChangePercent = quote.changePercent != null ? parseFloat(quote.changePercent).toFixed(2) : ((priceChange / parseFloat(quote.prevClose)) * 100).toFixed(2);
         const changeClass = priceChange >= 0 ? 'up' : 'down';
         const changeSign = priceChange >= 0 ? '+' : '';
         const currencySymbol = stockType === 'cn'
@@ -1052,24 +1026,32 @@ async function analyzeStock() {
         document.getElementById('priceChangePercent').textContent = `(${changeSign}${priceChangePercent}%)`;
         document.getElementById('priceChangePercent').className = `change-percent ${changeClass}`;
         
-        document.getElementById('openPrice').textContent = `${currencySymbol}${quote.open}`;
-        document.getElementById('highPrice').textContent = `${currencySymbol}${quote.high}`;
-        document.getElementById('lowPrice').textContent = `${currencySymbol}${quote.low}`;
+        const p2 = v => (v != null && !isNaN(v)) ? parseFloat(v).toFixed(2) : '--';
+        const vol = quote.volume != null ? (quote.volume / 1000000).toFixed(2) + 'M' : '--';
+        const amt = quote.amount != null ? (quote.amount / 1000000000).toFixed(2) + 'B' : (quote.volume != null && quote.price != null ? (quote.volume * quote.price / 1000000000).toFixed(2) + 'B' : '--');
+        
+        document.getElementById('openPrice').textContent = `${currencySymbol}${p2(quote.open)}`;
+        document.getElementById('highPrice').textContent = `${currencySymbol}${p2(quote.high)}`;
+        document.getElementById('lowPrice').textContent = `${currencySymbol}${p2(quote.low)}`;
         const preCloseEl = document.getElementById('preClosePrice');
-        if (preCloseEl) preCloseEl.textContent = `${currencySymbol}${quote.preClose}`;
-        document.getElementById('volume').textContent = quote.volume != null ? (quote.volume / 1000000).toFixed(2) + 'M' : '--';
-        document.getElementById('amount').textContent = quote.amount != null ? (quote.amount / 1000000000).toFixed(2) + 'B' : '--';
+        if (preCloseEl) preCloseEl.textContent = `${currencySymbol}${p2(quote.prevClose)}`;
+        document.getElementById('volume').textContent = vol;
+        document.getElementById('amount').textContent = amt;
         const bidAskEl = document.getElementById('bidAsk');
         if (bidAskEl) {
-            const bid = quote.bid != null ? `${currencySymbol}${quote.bid}` : '--';
-            const ask = quote.ask != null ? `${currencySymbol}${quote.ask}` : '--';
-            bidAskEl.textContent = `${bid} / ${ask}`;
+            const b = quote.bid != null ? p2(quote.bid) : '--';
+            const a = quote.ask != null ? p2(quote.ask) : '--';
+            bidAskEl.textContent = `${b} / ${a}`;
         }
         const yearRangeEl = document.getElementById('yearRange');
         if (yearRangeEl) {
-            const high = quote.yearHigh != null ? `${currencySymbol}${quote.yearHigh}` : '--';
-            const low = quote.yearLow != null ? `${currencySymbol}${quote.yearLow}` : '--';
-            yearRangeEl.textContent = `${low} - ${high}`;
+            const yh = quote.yearHigh != null ? p2(quote.yearHigh) : '--';
+            const yl = quote.yearLow != null ? p2(quote.yearLow) : '--';
+            yearRangeEl.textContent = `${yl} - ${yh}`;
+        }
+        const peEl = document.getElementById('peRatio');
+        if (peEl) {
+            peEl.textContent = quote.peRatio != null ? parseFloat(quote.peRatio).toFixed(2) : '--';
         }
         const providerEl = document.getElementById('dataProvider');
         if (providerEl) providerEl.textContent = quote.provider || '--';
@@ -1299,6 +1281,85 @@ function renderStockEvents(events) {
             <span class="event-type">${event.type}</span>
         </div>
     `).join('');
+}
+
+async function fetchManagementData(stockCode) {
+    try {
+        console.log('[Management] Fetching data for:', stockCode);
+        const response = await apiFetch(`/api/stock/management?code=${stockCode}`);
+        console.log('[Management] Response status:', response.status);
+        const data = await response.json();
+        console.log('[Management] Response data:', data);
+        
+        if (data.data && data.data.length > 0) {
+            console.log('[Management] Rendering', data.data.length, 'people');
+            renderManagementData(data.data);
+            return data.data;
+        } else {
+            console.log('[Management] No data returned');
+        }
+    } catch (error) {
+        console.error('获取管理团队数据失败:', error);
+    }
+    return null;
+}
+
+function renderManagementData(managementData) {
+    const container = document.getElementById('managementData');
+    if (!container) return;
+    
+    let html = '';
+    
+    managementData.forEach(person => {
+        const initials = person.name.split(' ').map(n => n[n.length-1]).join('').slice(-2);
+        const pay = person.pay ? formatCurrency(person.pay) : 'N/A';
+        
+        html += `
+            <div class="management-card">
+                <div class="management-header">
+                    <div class="management-avatar">${initials}</div>
+                    <div class="management-info">
+                        <h4>${person.name}</h4>
+                        <div class="management-title">${person.title}</div>
+                    </div>
+                </div>
+                <div class="management-details">
+                    <div class="management-item">
+                        <span class="label">年龄</span>
+                        <span class="value">${person.age || 'N/A'} 岁</span>
+                    </div>
+                    <div class="management-item">
+                        <span class="label">出生年份</span>
+                        <span class="value">${person.year_born || 'N/A'}</span>
+                    </div>
+                    <div class="management-item">
+                        <span class="label">已执行期权</span>
+                        <span class="value">${formatCurrency(person.exercised_value)}</span>
+                    </div>
+                    <div class="management-item">
+                        <span class="label">未执行期权</span>
+                        <span class="value">${formatCurrency(person.unexercised_value)}</span>
+                    </div>
+                    <div class="management-pay">
+                        <span class="label">年薪报酬</span>
+                        <span class="value">${pay}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+}
+
+function formatCurrency(value) {
+    if (value == null || isNaN(value)) return 'N/A';
+    if (value >= 1000000) {
+        return '$' + (value / 1000000).toFixed(2) + 'M';
+    } else if (value >= 1000) {
+        return '$' + (value / 1000).toFixed(2) + 'K';
+    }
+    return '$' + value.toFixed(2);
 }
 
 async function loadEnhancedAnalysis(stockCode, quote, holdingsForStock, newsData = null, financialData = null) {
@@ -1881,6 +1942,7 @@ function switchTab(tab) {
     const diarySection = document.getElementById('diarySection');
     const myPortfolioSection = document.getElementById('myPortfolioSection');
     const portfolioSection = document.getElementById('portfolioSection');
+    const financeSection = document.getElementById('financeSection');
     
     analysisSection.classList.add('hidden');
     newsSection.classList.add('hidden');
@@ -1888,6 +1950,7 @@ function switchTab(tab) {
     diarySection.classList.add('hidden');
     myPortfolioSection.classList.add('hidden');
     portfolioSection.classList.add('hidden');
+    if (financeSection) financeSection.classList.add('hidden');
     
     if (tab === 'analysis') {
         tabs[0].classList.add('active');
@@ -1900,17 +1963,23 @@ function switchTab(tab) {
         tabs[2].classList.add('active');
         stockPickerSection.classList.remove('hidden');
         loadStockPicker();
-    } else if (tab === 'diary') {
+    } else if (tab === 'finance') {
         tabs[3].classList.add('active');
+        if (financeSection) {
+            financeSection.classList.remove('hidden');
+            loadFinanceData();
+        }
+    } else if (tab === 'diary') {
+        tabs[4].classList.add('active');
         diarySection.classList.remove('hidden');
         initDiary();
     } else if (tab === 'myPortfolio') {
-        tabs[4].classList.add('active');
+        tabs[5].classList.add('active');
         myPortfolioSection.classList.remove('hidden');
         renderMyHoldings();
         renderMyTradeHistory();
     } else {
-        tabs[5].classList.add('active');
+        tabs[6].classList.add('active');
         portfolioSection.classList.remove('hidden');
         renderPortfolio();
     }
@@ -3637,6 +3706,11 @@ function appNavigate(view) {
         return;
     }
     
+    if (view === 'finance') {
+        switchTab('finance');
+        return;
+    }
+    
     if (typeof switchTab === 'function') {
         switchTab(view);
     }
@@ -3894,3 +3968,299 @@ document.addEventListener('DOMContentLoaded', function() {
     const initialView = (appSettings && appSettings.lastView) ? appSettings.lastView : 'analysis';
     appNavigate(initialView);
 });
+
+// 切换K线周期
+async function switchKlinePeriod(period) {
+    currentKlinePeriod = period;
+    
+    // 更新按钮状态
+    document.querySelectorAll('.period-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    const btn = document.querySelector(`[data-period="${period}"]`);
+    if (btn) btn.classList.add('active');
+    
+    // 重新加载数据 - 无论A股还是美股都重新调用
+    const stockCode = document.getElementById('stockCode').value.trim().toUpperCase();
+    const stockType = document.getElementById('stockType').value;
+    
+    if (stockCode) {
+        await analyzeStock();
+    }
+}
+
+// ==================== 财务报表模块 ====================
+
+let currentFinancePeriod = 'annual';
+let currentFinanceStatement = 'income';
+let currentFinanceSymbol = '';
+let currentFinanceName = '';
+let financeSortCol = null;   // column key to sort by
+let financeSortAsc = true;   // true = asc, false = desc
+let financeRawData = [];      // keep raw rows for sorting
+
+const FINANCE_LABELS = {
+    // Income Statement
+    operating_revenue: '营业总收入',
+    total_revenue: '总收入',
+    cost_of_revenue: '营业成本',
+    gross_profit: '毛利润',
+    selling_general_and_admin_expense: '管理费用（SGA）',
+    research_and_development_expense: '研发费用（R&D）',
+    operating_expense: '营业费用',
+    operating_income: '营业利润',
+    ebitda: 'EBITDA',
+    total_pre_tax_income: '税前利润',
+    tax_provision: '所得税',
+    net_income: '净利润',
+    basic_earnings_per_share: '基本每股收益',
+    diluted_earnings_per_share: '稀释每股收益',
+    // Balance Sheet
+    cash_and_cash_equivalents: '现金及现金等价物',
+    short_term_investments: '短期投资',
+    net_receivables: '应收账款净额',
+    inventories: '存货',
+    total_current_assets: '流动资产合计',
+    plant_property_equipment_net: '固定资产净值',
+    total_non_current_assets: '非流动资产合计',
+    total_assets: '资产总计',
+    accounts_payable: '应付账款',
+    current_debt: '短期债务',
+    current_deferred_revenue: '递延收入（流动）',
+    total_current_liabilities: '流动负债合计',
+    long_term_debt: '长期债务',
+    total_non_current_liabilities: '非流动负债合计',
+    total_liabilities_net_minority_interest: '负债合计',
+    common_stock_equity: '普通股权益',
+    retained_earnings: '留存收益',
+    // Cash Flow
+    net_income_from_continuing_operations: '净利润（经营）',
+    depreciation_and_amortization: '折旧与摊销',
+    stock_based_compensation: '股票补偿（SBC）',
+    change_in_working_capital: '营运资本变动',
+    cash_flow_from_continuing_operating_activities: '经营活动现金流',
+    investments_in_property_plant_and_equipment: '资本支出（PP&E）',
+    net_investment_purchase_and_sale: '投资活动现金流净额',
+    cash_flow_from_continuing_investing_activities: '投资活动现金流',
+    net_issuance_payments_of_debt: '债务净变动',
+    repurchase_of_common_equity: '股票回购',
+    cash_dividends_paid: '支付股利',
+    cash_flow_from_continuing_financing_activities: '筹资活动现金流',
+    net_change_in_cash_and_equivalents: '现金及等价物净增加',
+    beginning_cash_position: '期初现金',
+    end_cash_position: '期末现金',
+    free_cash_flow: '自由现金流',
+};
+
+function _fmtNum(v) {
+    if (v === null || v === undefined || v === '') return '-';
+    const n = parseFloat(v);
+    if (isNaN(n)) return '-';
+    if (Math.abs(n) >= 1e12) return (n / 1e12).toFixed(2) + 'T';
+    if (Math.abs(n) >= 1e9)  return (n / 1e9).toFixed(2) + 'B';
+    if (Math.abs(n) >= 1e6)  return (n / 1e6).toFixed(2) + 'M';
+    if (Math.abs(n) >= 1e3)  return n.toLocaleString('en-US', {maximumFractionDigits: 2});
+    return n.toFixed(2);
+}
+
+function _fmtDate(v) {
+    if (!v) return '-';
+    try {
+        const d = new Date(v);
+        if (isNaN(d)) return '-';
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    } catch { return '-'; }
+}
+
+function _getColLabel(key) {
+    return FINANCE_LABELS[key] || key.replace(/_/g, ' ');
+}
+
+async function loadFinanceData() {
+    const emptyEl = document.getElementById('financeEmpty');
+    const loadingEl = document.getElementById('financeLoading');
+    const wrapperEl = document.getElementById('financeTableWrapper');
+    if (!currentFinanceSymbol) {
+        if (emptyEl) { emptyEl.classList.remove('hidden'); emptyEl.querySelector('p').textContent = '\u2709 \u5728\u4e0a\u65b9\u641c\u7d22\u80a1\u7968\u540e\uff0c\u5373\u53ef\u67e5\u770b\u8d22\u52a1\u62a5\u8868'; }
+        if (loadingEl) loadingEl.classList.add('hidden');
+        if (wrapperEl) wrapperEl.classList.add('hidden');
+        return;
+    }
+    if (emptyEl) emptyEl.classList.add('hidden');
+    if (loadingEl) loadingEl.classList.remove('hidden');
+    if (wrapperEl) wrapperEl.classList.add('hidden');
+
+    const stmtMap = { income: 'income', balance: 'balance', cash: 'cash' };
+    const endpoint = `/api/stock/financial/${stmtMap[currentFinanceStatement]}`;
+    try {
+        const resp = await apiFetch(`${endpoint}?code=${encodeURIComponent(currentFinanceSymbol)}&period=${currentFinancePeriod}`);
+        const json = await resp.json();
+        if (json.success && json.data && json.data.length > 0) {
+            financeRawData = json.data;
+            // reset sort on new data load
+            financeSortCol = null;
+            financeSortAsc = true;
+            renderFinanceTable(json.data);
+            if (loadingEl) loadingEl.classList.add('hidden');
+            if (wrapperEl) wrapperEl.classList.remove('hidden');
+        } else {
+            financeRawData = [];
+            if (loadingEl) loadingEl.classList.add('hidden');
+            if (emptyEl) { emptyEl.classList.remove('hidden'); emptyEl.querySelector('p').textContent = '\u6682\u65e0\u8be5\u80a1\u7968\u7684\u8d22\u52a1\u6570\u636e'; }
+        }
+    } catch (e) {
+        console.error('Finance load error:', e);
+        financeRawData = [];
+        if (loadingEl) loadingEl.classList.add('hidden');
+        if (emptyEl) { emptyEl.classList.remove('hidden'); emptyEl.querySelector('p').textContent = '\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5'; }
+    }
+}
+
+function renderFinanceTable(rows) {
+    const thead = document.getElementById('financeTableHead');
+    const tbody = document.getElementById('financeTableBody');
+    if (!thead || !tbody || !rows.length) return;
+
+    const periods = rows.map(r => _fmtDate(r.period_ending));
+    const fields = Object.keys(rows[0]).filter(k => k !== 'period_ending' && k !== 'fiscal_period' && rows[0][k] !== null && rows[0][k] !== undefined);
+
+    // Build sortable header
+    thead.innerHTML = '<tr><th class="finance-th-index">\u6307\u6807</th>' +
+        periods.map((p, i) => {
+            // find field index (column) — periods[i] corresponds to rows[i]
+            return `<th class="finance-th finance-th-sortable" data-col="${i}" onclick="sortFinanceCol(${i})">
+                <span class="finance-th-text">${p}</span>
+                <span class="finance-sort-icon" id="sort-icon-${i}"></span>
+            </th>`;
+        }).join('') + '</tr>';
+
+    // Apply current sort
+    let sortedRows = rows.slice();
+    if (financeSortCol !== null) {
+        sortedRows.sort((a, b) => {
+            const va = Object.values(a)[financeSortCol + 2]; // +2: skip period_ending, fiscal_period
+            const vb = Object.values(b)[financeSortCol + 2];
+            if (va == null && vb == null) return 0;
+            if (va == null) return 1;
+            if (vb == null) return -1;
+            const na = parseFloat(va), nb = parseFloat(vb);
+            if (!isNaN(na) && !isNaN(nb)) return financeSortAsc ? na - nb : nb - na;
+            return financeSortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+        });
+        // Update sort icons
+        fields.forEach((_, i) => {
+            const icon = document.getElementById(`sort-icon-${i}`);
+            if (!icon) return;
+            if (i === financeSortCol) {
+                icon.textContent = financeSortAsc ? ' \u25b2' : ' \u25bc'; // ▲ or ▼
+                icon.style.color = '#00d4ff';
+            } else {
+                icon.textContent = '';
+            }
+        });
+    }
+
+    // Find field keys in same order as values() iteration
+    const fieldKeys = Object.keys(rows[0]).filter(k => k !== 'period_ending' && k !== 'fiscal_period');
+
+    tbody.innerHTML = '';
+    fields.forEach(key => {
+        const fi = fieldKeys.indexOf(key);
+        const label = _getColLabel(key);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td class="finance-td-index">${label}</td>` +
+            sortedRows.map(row => {
+                const val = row[key];
+                const num = parseFloat(val);
+                const cls = !isNaN(num) ? (num < 0 ? ' finance-td-negative' : num > 0 ? ' finance-td-positive' : '') : '';
+                return `<td class="finance-td${cls}">${_fmtNum(val)}</td>`;
+            }).join('');
+        tbody.appendChild(tr);
+    });
+}
+
+function sortFinanceCol(colIdx) {
+    if (financeSortCol === colIdx) {
+        financeSortAsc = !financeSortAsc;
+    } else {
+        financeSortCol = colIdx;
+        financeSortAsc = true;
+    }
+    if (financeRawData.length) renderFinanceTable(financeRawData);
+}
+
+function switchFinancePeriod(period) {
+    currentFinancePeriod = period;
+    document.querySelectorAll('.finance-period-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.period === period);
+    });
+    loadFinanceData();
+}
+
+function switchFinanceStatement(stmt) {
+    currentFinanceStatement = stmt;
+    document.querySelectorAll('.finance-stmt-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.stmt === stmt);
+    });
+    loadFinanceData();
+}
+
+function exportFinanceTable() {
+    const table = document.getElementById('financeTable');
+    if (!table) return;
+    const rows = Array.from(table.querySelectorAll('tr'));
+    const csv = rows.map(row =>
+        Array.from(row.querySelectorAll('th, td'))
+            .map(cell => `"${cell.textContent.replace(/"/g, '""')}"`)
+            .join(',')
+    ).join('\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentFinanceSymbol}_${currentFinanceStatement}_${currentFinancePeriod}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function toggleFinanceFullscreen(btn) {
+    const wrapper = document.getElementById('financeTableWrapper');
+    if (!wrapper) return;
+    const isFullscreen = wrapper.classList.toggle('finance-fullscreen');
+    if (btn) {
+        btn.textContent = isFullscreen ? '\u2212' : '\u2b1a'; // − or ⬚
+        btn.style.color = isFullscreen ? '#00ff88' : '';
+    }
+    document.getElementById('financeTableWrapper').dataset.fullscreen = isFullscreen;
+}
+
+// ESC key exits finance fullscreen
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const wrapper = document.getElementById('financeTableWrapper');
+        if (wrapper && wrapper.dataset.fullscreen === 'true') {
+            wrapper.classList.remove('finance-fullscreen');
+            wrapper.dataset.fullscreen = 'false';
+            const btn = document.querySelector('[data-fullscreen-btn]');
+            if (btn) { btn.textContent = '\u2b1a'; btn.style.color = ''; }
+        }
+    }
+});
+
+// Sync finance tab when analyzeStock completes
+const _origAnalyzeStock = window.analyzeStock;
+window.analyzeStock = async function() {
+    if (_origAnalyzeStock) await _origAnalyzeStock.apply(this, arguments);
+    const codeInput = document.getElementById('stockCode');
+    const nameEl = document.getElementById('stockName');
+    currentFinanceSymbol = codeInput ? codeInput.value.trim().toUpperCase() : '';
+    currentFinanceName = nameEl ? nameEl.textContent : '';
+    const fNameEl = document.getElementById('financeStockName');
+    const fCodeEl = document.getElementById('financeStockCode');
+    if (fNameEl) fNameEl.textContent = currentFinanceName || currentFinanceSymbol;
+    if (fCodeEl) fCodeEl.textContent = currentFinanceSymbol;
+    const financeSection = document.getElementById('financeSection');
+    if (financeSection && !financeSection.classList.contains('hidden')) {
+        loadFinanceData();
+    }
+};
