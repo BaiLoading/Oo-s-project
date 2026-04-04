@@ -161,3 +161,30 @@
   border-radius: 12px;
   font-weight: 600;
 }
+
+.action-buttons {
+  display: flex;
+  gap: 15px;
+  margin-top: 20px;
+  
+  .detail-btn, .ai-btn {
+    flex: 1;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    border-radius: 12px;
+    padding: 10px 0;
+  }
+  
+  .detail-btn {
+    background: linear-gradient(90deg, #00d4ff, #00ff88);
+    color: #000;
+  }
+  
+  .ai-btn {
+    background: rgba(0, 212, 255, 0.2);
+    color: #00d4ff;
+    border: 1px solid #00d4ff;
+  }
+}
