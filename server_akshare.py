@@ -3,12 +3,70 @@ from flask_cors import CORS
 import random
 import json
 import os
+import hashlib
+import re
 from datetime import datetime, timedelta
 import time
 import requests
+import subprocess
 
 app = Flask(__name__)
 CORS(app)
+
+def _load_dotenv_if_present():
+    try:
+        env_path = os.path.join(os.path.dirname(__file__), '.env')
+        if not os.path.exists(env_path):
+            return
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith('#') or '=' not in s:
+                    continue
+                k, v = s.split('=', 1)
+                key = k.strip()
+                val = v.strip().strip('"').strip("'")
+                if key and val != '':
+                    os.environ[key] = val
+    except:
+        return
+
+_load_dotenv_if_present()
+
+def _fingerprint_secret(value):
+    if not value:
+        return None
+    try:
+        return hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]
+    except:
+        return None
+
+def _read_dotenv_value(key_name):
+    try:
+        env_path = os.path.join(os.path.dirname(__file__), '.env')
+        if not os.path.exists(env_path):
+            return None
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith('#') or '=' not in s:
+                    continue
+                k, v = s.split('=', 1)
+                if k.strip() != key_name:
+                    continue
+                val = v.strip().strip('"').strip("'")
+                return val or None
+        return None
+    except:
+        return None
+
+def _sanitize_secret_text(text):
+    if not text:
+        return text
+    try:
+        return re.sub(r"sk-[A-Za-z0-9_-]{10,}", "sk-***", str(text))
+    except:
+        return str(text)
 
 # 记忆存储文件路径
 MEMORY_FILE = 'user_memory.json'
@@ -201,6 +259,20 @@ OPENBB_CACHE_TTL_SECONDS = {
     'crypto_historical': 600
 }
 
+TRADINGAGENTS_REPORT_CACHE = {}
+TRADINGAGENTS_REPORT_CACHE_TTL_SECONDS = 3600
+
+def _ta_cache_get(key):
+    item = TRADINGAGENTS_REPORT_CACHE.get(key)
+    if not item:
+        return None
+    if time.time() - item.get('ts', 0) > TRADINGAGENTS_REPORT_CACHE_TTL_SECONDS:
+        return None
+    return item.get('data')
+
+def _ta_cache_set(key, data):
+    TRADINGAGENTS_REPORT_CACHE[key] = {'ts': time.time(), 'data': data}
+
 def _openbb_cache_get(key, ttl_seconds):
     item = OPENBB_CACHE.get(key)
     if not item:
@@ -262,8 +334,8 @@ def _normalize_date(value):
 def _openbb_equity_data(symbol, market, days):
     symbol = str(symbol).strip().upper()
     if market == 'us':
-        providers_historical = ['yfinance', 'cboe', 'fmp', 'tiingo', 'polygon', 'intrinio', 'tmx', 'tradier', 'alpha_vantage']
-        providers_quote = ['yfinance', 'cboe', 'fmp', 'intrinio', 'tmx', 'tradier']
+        providers_historical = ['cboe', 'yfinance', 'fmp', 'tiingo', 'polygon', 'intrinio', 'tmx', 'tradier', 'alpha_vantage']
+        providers_quote = ['cboe', 'yfinance', 'fmp', 'intrinio', 'tmx', 'tradier']
     else:
         providers_historical = ['yfinance', 'fmp', 'polygon', 'tiingo']
         providers_quote = ['yfinance', 'fmp']
@@ -2391,6 +2463,142 @@ def ai_chat():
         traceback.print_exc()
         return jsonify({'error': 'AI聊天失败'}), 500
 
+@app.route('/api/ai/tradingagents/report', methods=['POST'])
+def tradingagents_report():
+    try:
+        data = request.json or {}
+        symbol = (data.get('symbol') or data.get('code') or '').strip().upper()
+        trade_date = (data.get('date') or '').strip()
+        language = (data.get('language') or 'Chinese').strip()
+        openai_api_key = (data.get('openai_api_key') or '').strip()
+        openai_base_url = (data.get('openai_base_url') or '').strip()
+        deep_model = (data.get('deep_model') or '').strip()
+        quick_model = (data.get('quick_model') or '').strip()
+        max_debate_rounds = data.get('max_debate_rounds')
+        max_risk_discuss_rounds = data.get('max_risk_discuss_rounds')
+        mode = (data.get('mode') or 'fast').strip()
+        analysts = (data.get('analysts') or '').strip()
+
+        if not symbol:
+            return jsonify({'error': '请提供股票代码'}), 400
+
+        if not os.environ.get('OPENAI_API_KEY') and not openai_api_key:
+            return jsonify({'error': '未配置 OPENAI_API_KEY（可在“设置→系统设置→模型配置”里填写，或在启动服务前设置环境变量）'}), 400
+
+        venv_python = os.path.join(os.path.dirname(__file__), '.venv_tradingagents', 'bin', 'python')
+        runner = os.path.join(os.path.dirname(__file__), 'tradingagents_runner.py')
+
+        if not os.path.exists(venv_python):
+            return jsonify({'error': 'TradingAgents 未安装（缺少 .venv_tradingagents），请先完成安装'}), 500
+        if not os.path.exists(runner):
+            return jsonify({'error': 'TradingAgents runner 脚本缺失'}), 500
+
+        cache_key = (
+            symbol,
+            trade_date,
+            language,
+            openai_base_url,
+            deep_model,
+            quick_model,
+            str(max_debate_rounds),
+            str(max_risk_discuss_rounds),
+            mode,
+            analysts
+        )
+        cached = _ta_cache_get(cache_key)
+        if cached is not None:
+            return jsonify({'success': True, 'data': cached, 'cached': True})
+
+        cmd = [
+            venv_python,
+            runner,
+            '--symbol', symbol
+        ]
+        if trade_date:
+            cmd += ['--date', trade_date]
+        if language:
+            cmd += ['--language', language]
+        if openai_base_url:
+            cmd += ['--base_url', openai_base_url]
+        if deep_model:
+            cmd += ['--deep_model', deep_model]
+        if quick_model:
+            cmd += ['--quick_model', quick_model]
+        if max_debate_rounds is not None and str(max_debate_rounds).strip() != '':
+            cmd += ['--max_debate_rounds', str(max_debate_rounds)]
+        if max_risk_discuss_rounds is not None and str(max_risk_discuss_rounds).strip() != '':
+            cmd += ['--max_risk_discuss_rounds', str(max_risk_discuss_rounds)]
+        if mode:
+            cmd += ['--mode', mode]
+        if analysts:
+            cmd += ['--analysts', analysts]
+
+        env = os.environ.copy()
+        if openai_api_key and not env.get('OPENAI_API_KEY'):
+            env['OPENAI_API_KEY'] = openai_api_key
+        try:
+            port = request.host.split(':')[1] if ':' in request.host else '3000'
+        except:
+            port = '3000'
+        env['TA_DATA_BASE_URL'] = f"http://127.0.0.1:{port}"
+
+        proc = subprocess.run(
+            cmd,
+            cwd=os.path.dirname(__file__),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=180
+        )
+
+        stdout = (proc.stdout or '').strip()
+        stderr = (proc.stderr or '').strip()
+
+        try:
+            payload = json.loads(stdout) if stdout else None
+        except Exception:
+            payload = None
+
+        if proc.returncode == 0 and payload and payload.get('ok'):
+            _ta_cache_set(cache_key, payload)
+            return jsonify({
+                'success': True,
+                'data': payload
+            })
+
+        if payload and payload.get('error'):
+            return jsonify({'error': _sanitize_secret_text(payload.get('error')), 'data': payload}), 502
+
+        err_text = stderr or stdout or f'TradingAgents 执行失败（exit={proc.returncode}）'
+        return jsonify({'error': _sanitize_secret_text(err_text)[:2000]}), 502
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'TradingAgents 执行超时，请稍后重试或减少分析复杂度'}), 504
+    except Exception as e:
+        return jsonify({'error': f'TradingAgents 执行失败: {str(e)}'}), 500
+
+@app.route('/api/ai/tradingagents/health', methods=['GET'])
+def tradingagents_health():
+    try:
+        venv_python = os.path.join(os.path.dirname(__file__), '.venv_tradingagents', 'bin', 'python')
+        runner = os.path.join(os.path.dirname(__file__), 'tradingagents_runner.py')
+        env_key = os.environ.get('OPENAI_API_KEY')
+        dotenv_key = _read_dotenv_value('OPENAI_API_KEY')
+        return jsonify({
+            'success': True,
+            'data': {
+                'server_python': os.sys.version.split(' ')[0],
+                'has_openai_api_key_env': bool(os.environ.get('OPENAI_API_KEY')),
+                'has_alpha_vantage_api_key_env': bool(os.environ.get('ALPHA_VANTAGE_API_KEY')),
+                'tradingagents_venv_python_exists': os.path.exists(venv_python),
+                'tradingagents_runner_exists': os.path.exists(runner),
+                'openai_key_fingerprint_env': _fingerprint_secret(env_key),
+                'openai_key_fingerprint_dotenv': _fingerprint_secret(dotenv_key),
+                'dotenv_matches_env': bool(env_key and dotenv_key and env_key == dotenv_key)
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': f'health检查失败: {str(e)}'}), 500
+
 # ==================== 投资策略API ====================
 @app.route('/api/strategy', methods=['GET'])
 def get_strategies():
@@ -2509,4 +2717,4 @@ if __name__ == '__main__':
 ╚═══════════════════════════════════════════════════════════════════╝
     ''')
     port = int(os.environ.get('PORT', 3000))
-    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False, threaded=True)

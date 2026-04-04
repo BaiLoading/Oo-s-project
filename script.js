@@ -34,6 +34,14 @@ function getDefaultAppSettings() {
             baseUrl: 'https://api.openai.com/v1',
             model: '',
             maxTokens: 1024
+        },
+        tradingagents: {
+            openaiApiKey: '',
+            openaiBaseUrl: 'https://api.openai.com/v1',
+            deepModel: 'gpt-4.1',
+            quickModel: 'gpt-4.1-mini',
+            maxDebateRounds: 1,
+            maxRiskDiscussRounds: 1
         }
     };
 }
@@ -58,6 +66,10 @@ function loadAppSettings() {
             ai: {
                 ...defaults.ai,
                 ...(parsed.ai || {})
+            },
+            tradingagents: {
+                ...defaults.tradingagents,
+                ...(parsed.tradingagents || {})
             }
         };
     } catch (e) {
@@ -3290,6 +3302,14 @@ function formatAIMessage(message) {
         .replace(/\*(.*?)\*/g, '<em>$1</em>');
 }
 
+function formatMarkdownSafe(message) {
+    const escaped = escapeHtml(message || '');
+    return escaped
+        .replace(/\n/g, '<br>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>');
+}
+
 // 交易日记标签页切换
 function switchDiaryTab(tab) {
     const tabs = document.querySelectorAll('.diary-tab');
@@ -3515,6 +3535,7 @@ function hideAllAppViews() {
         'watchlistSection',
         'backtestSection',
         'settingsSection',
+        'aiReportSection',
         'analysisSection',
         'newsSection',
         'stockPickerSection',
@@ -3544,6 +3565,7 @@ function expandGroupForView(view) {
         portfolio: 'trading',
         myPortfolio: 'trading',
         diary: 'trading',
+        aiReport: 'ai',
         stockPicker: 'ai'
     };
     const groupKey = map[view];
@@ -3597,9 +3619,57 @@ function appNavigate(view) {
         populateSettingsUI();
         return;
     }
+
+    if (view === 'aiReport') {
+        const el = document.getElementById('aiReportSection');
+        if (el) el.classList.remove('hidden');
+        const dateInput = document.getElementById('taDate');
+        if (dateInput && !dateInput.value) {
+            const d = new Date();
+            d.setDate(d.getDate() - 1);
+            dateInput.value = d.toISOString().split('T')[0];
+        }
+        const hint = document.getElementById('taHint');
+        if (hint) {
+            const hasKey = appSettings.tradingagents && (appSettings.tradingagents.openaiApiKey || '').trim();
+            hint.textContent = hasKey ? '' : '提示：先到“设置 → TradingAgents”填写 OpenAI API Key，然后再生成报告。';
+        }
+        return;
+    }
     
     if (typeof switchTab === 'function') {
         switchTab(view);
+    }
+}
+
+async function diagnoseTradingAgents() {
+    const hint = document.getElementById('taHint');
+    if (hint) hint.textContent = '诊断中...';
+    try {
+        const resp = await apiFetch('/api/ai/tradingagents/health');
+        const result = await resp.json();
+        if (!resp.ok) throw new Error((result && result.error) || `请求失败(${resp.status})`);
+        const data = result && result.data ? result.data : {};
+        const localKey = appSettings.tradingagents && (appSettings.tradingagents.openaiApiKey || '').trim();
+        const lines = [];
+        lines.push(`服务端 Python: ${data.server_python || '--'}`);
+        lines.push(`服务端已配置 OPENAI_API_KEY: ${data.has_openai_api_key_env ? '是' : '否'}`);
+        if (data.openai_key_fingerprint_env) lines.push(`服务端 Key 指纹: ${data.openai_key_fingerprint_env}`);
+        if (data.openai_key_fingerprint_dotenv) lines.push(`.env Key 指纹: ${data.openai_key_fingerprint_dotenv}`);
+        if (data.openai_key_fingerprint_env && data.openai_key_fingerprint_dotenv) {
+            lines.push(`.env 与服务端一致: ${data.dotenv_matches_env ? '是' : '否'}`);
+        }
+        lines.push(`浏览器已保存 TradingAgents Key: ${localKey ? '是' : '否'}`);
+        lines.push(`TradingAgents venv: ${data.tradingagents_venv_python_exists ? 'OK' : '缺失'}`);
+        lines.push(`Runner 脚本: ${data.tradingagents_runner_exists ? 'OK' : '缺失'}`);
+        if (!localKey && !data.has_openai_api_key_env) {
+            lines.push('下一步：到“设置 → TradingAgents”填写 OpenAI API Key 并保存，然后回到此页生成报告。');
+        } else {
+            lines.push('下一步：回到此页点击“生成报告”，如果报错会显示具体原因。');
+        }
+        if (hint) hint.innerHTML = formatMarkdownSafe(lines.map(s => `- ${s}`).join('\n'));
+    } catch (e) {
+        if (hint) hint.textContent = `诊断失败：${e && e.message ? e.message : '未知错误'}`;
     }
 }
 
@@ -3624,6 +3694,24 @@ function populateSettingsUI() {
     
     const hint = document.getElementById('aiTestHint');
     if (hint) hint.textContent = '';
+
+    const taKey = document.getElementById('settingTaOpenAiApiKey');
+    if (taKey) taKey.value = (appSettings.tradingagents && appSettings.tradingagents.openaiApiKey) || '';
+
+    const taBase = document.getElementById('settingTaOpenAiBaseUrl');
+    if (taBase) taBase.value = (appSettings.tradingagents && appSettings.tradingagents.openaiBaseUrl) || '';
+
+    const taDeep = document.getElementById('settingTaDeepModel');
+    if (taDeep) taDeep.value = (appSettings.tradingagents && appSettings.tradingagents.deepModel) || '';
+
+    const taQuick = document.getElementById('settingTaQuickModel');
+    if (taQuick) taQuick.value = (appSettings.tradingagents && appSettings.tradingagents.quickModel) || '';
+
+    const taDebate = document.getElementById('settingTaDebateRounds');
+    if (taDebate) taDebate.value = (appSettings.tradingagents && appSettings.tradingagents.maxDebateRounds) || 1;
+
+    const taRisk = document.getElementById('settingTaRiskRounds');
+    if (taRisk) taRisk.value = (appSettings.tradingagents && appSettings.tradingagents.maxRiskDiscussRounds) || 1;
 }
 
 function saveAppSettingsFromUI() {
@@ -3633,6 +3721,12 @@ function saveAppSettingsFromUI() {
     const aiBaseUrl = document.getElementById('settingAiBaseUrl');
     const aiModel = document.getElementById('settingAiModel');
     const aiMaxTokens = document.getElementById('settingAiMaxTokens');
+    const taKey = document.getElementById('settingTaOpenAiApiKey');
+    const taBase = document.getElementById('settingTaOpenAiBaseUrl');
+    const taDeep = document.getElementById('settingTaDeepModel');
+    const taQuick = document.getElementById('settingTaQuickModel');
+    const taDebate = document.getElementById('settingTaDebateRounds');
+    const taRisk = document.getElementById('settingTaRiskRounds');
     
     const next = {
         ...appSettings,
@@ -3644,6 +3738,15 @@ function saveAppSettingsFromUI() {
             baseUrl: aiBaseUrl ? aiBaseUrl.value.trim() : appSettings.ai.baseUrl,
             model: aiModel ? aiModel.value.trim() : appSettings.ai.model,
             maxTokens: aiMaxTokens ? Number(aiMaxTokens.value) || 1024 : appSettings.ai.maxTokens
+        },
+        tradingagents: {
+            ...appSettings.tradingagents,
+            openaiApiKey: taKey ? taKey.value : appSettings.tradingagents.openaiApiKey,
+            openaiBaseUrl: taBase ? taBase.value.trim() : appSettings.tradingagents.openaiBaseUrl,
+            deepModel: taDeep ? taDeep.value.trim() : appSettings.tradingagents.deepModel,
+            quickModel: taQuick ? taQuick.value.trim() : appSettings.tradingagents.quickModel,
+            maxDebateRounds: taDebate ? Number(taDebate.value) || 1 : appSettings.tradingagents.maxDebateRounds,
+            maxRiskDiscussRounds: taRisk ? Number(taRisk.value) || 1 : appSettings.tradingagents.maxRiskDiscussRounds
         }
     };
     
@@ -3697,6 +3800,80 @@ async function testAiChatConfig() {
         if (hint) hint.textContent = `测试失败：${e && e.message ? e.message : '未知错误'}`;
     } finally {
         appSettings = prev;
+    }
+}
+
+async function generateTradingAgentsReport() {
+    const symbolInput = document.getElementById('taSymbol');
+    const dateInput = document.getElementById('taDate');
+    const languageSelect = document.getElementById('taLanguage');
+    const modeSelect = document.getElementById('taMode');
+    const hint = document.getElementById('taHint');
+    const meta = document.getElementById('taMeta');
+    const content = document.getElementById('taReportContent');
+    
+    const symbol = symbolInput ? symbolInput.value.trim().toUpperCase() : '';
+    const date = dateInput ? dateInput.value : '';
+    const language = languageSelect ? languageSelect.value : 'Chinese';
+    const mode = modeSelect ? modeSelect.value : 'fast';
+    const ta = appSettings.tradingagents || {};
+    const openaiApiKey = (ta.openaiApiKey || '').trim();
+    const openaiBaseUrl = (ta.openaiBaseUrl || '').trim();
+    const deepModel = (ta.deepModel || '').trim();
+    const quickModel = (ta.quickModel || '').trim();
+    const maxDebateRounds = ta.maxDebateRounds;
+    const maxRiskDiscussRounds = ta.maxRiskDiscussRounds;
+    
+    if (!symbol) {
+        alert('请输入股票代码');
+        return;
+    }
+
+    const shouldSendKey = !!openaiApiKey;
+    
+    if (hint) hint.textContent = '生成中...';
+    if (meta) meta.textContent = '';
+    if (content) content.textContent = '正在生成报告，请稍候...';
+    
+    try {
+        const response = await apiFetch('/api/ai/tradingagents/report', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                symbol,
+                date,
+                language,
+                mode,
+                openai_api_key: shouldSendKey ? openaiApiKey : '',
+                openai_base_url: openaiBaseUrl,
+                deep_model: deepModel,
+                quick_model: quickModel,
+                max_debate_rounds: maxDebateRounds,
+                max_risk_discuss_rounds: maxRiskDiscussRounds
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+            throw new Error((result && result.error) || `请求失败(${response.status})`);
+        }
+        
+        if (!result.success || !result.data) {
+            throw new Error((result && result.error) || '返回数据不完整');
+        }
+        
+        const payload = result.data;
+        const md = payload.report_markdown || '';
+        const decision = payload.decision ? `\n\n### 信号摘要\n${payload.decision}` : '';
+        if (meta) meta.textContent = `${payload.symbol || symbol} · ${payload.trade_date || date || ''} · 数据源: ${payload.data_vendor || '--'}`;
+        if (content) content.innerHTML = formatMarkdownSafe(`${md}${decision}`.trim() || '暂无报告内容');
+        if (hint) hint.textContent = '生成完成';
+    } catch (e) {
+        if (hint) hint.textContent = `生成失败：${e && e.message ? e.message : '未知错误'}`;
+        if (content) content.textContent = '生成失败，请检查后端配置与网络情况。';
     }
 }
 

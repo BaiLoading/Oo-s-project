@@ -71,6 +71,9 @@
                         <span class="sidebar-item-caret" data-caret="ai">▾</span>
                     </button>
                     <div class="sidebar-submenu" data-submenu="ai">
+                        <button class="sidebar-item sidebar-item-child" data-view="aiReport" onclick="appNavigate('aiReport')">
+                            <span class="sidebar-item-text">股票分析</span>
+                        </button>
                         <button class="sidebar-item sidebar-item-child" data-view="stockPicker" onclick="appNavigate('stockPicker')">
                             <span class="sidebar-item-text">智能选股</span>
                         </button>
@@ -179,6 +182,39 @@
                 </div>
 
                 <div class="settings-card">
+                    <h3>TradingAgents</h3>
+                    <div class="form-group">
+                        <label>OpenAI API Key</label>
+                        <input type="password" id="settingTaOpenAiApiKey" placeholder="仅保存在浏览器本地">
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL</label>
+                        <input type="text" id="settingTaOpenAiBaseUrl" placeholder="例如：https://api.openai.com/v1">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Deep 模型</label>
+                            <input type="text" id="settingTaDeepModel" placeholder="例如：gpt-4.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Quick 模型</label>
+                            <input type="text" id="settingTaQuickModel" placeholder="例如：gpt-4.1-mini">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Debate 回合</label>
+                            <input type="number" id="settingTaDebateRounds" placeholder="例如：1">
+                        </div>
+                        <div class="form-group">
+                            <label>Risk Discuss 回合</label>
+                            <input type="number" id="settingTaRiskRounds" placeholder="例如：1">
+                        </div>
+                    </div>
+                    <div class="settings-note">Key 仅在浏览器本地保存；生成报告时会通过 HTTPS 发送给本机后端，仅用于本次调用。</div>
+                </div>
+
+                <div class="settings-card">
                     <h3>财经新闻</h3>
                     <div class="settings-note">该模块目前由后端统一提供新闻聚合（无需 Key）。</div>
                 </div>
@@ -186,6 +222,57 @@
                 <div class="settings-card">
                     <h3>AkShare</h3>
                     <div class="settings-note">该模块通过 AkShare 抓取行情数据（无需 Key）。</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="aiReportSection" class="hidden">
+            <div class="analysis-container">
+                <div class="analysis-panel full-width">
+                    <div class="analysis-header">
+                        <h2>🤖 AI 股票分析报告</h2>
+                        <p class="analysis-subtitle">多智能体协作分析（TradingAgents）</p>
+                    </div>
+
+                    <div class="analysis-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>股票代码</label>
+                                <input type="text" id="taSymbol" placeholder="如：AAPL / NVDA / 0700.HK / BTC-USD">
+                            </div>
+                            <div class="form-group">
+                                <label>分析日期</label>
+                                <input type="date" id="taDate">
+                            </div>
+                            <div class="form-group">
+                                <label>输出语言</label>
+                                <select id="taLanguage">
+                                    <option value="Chinese">中文</option>
+                                    <option value="English">English</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>模式</label>
+                                <select id="taMode">
+                                    <option value="fast">极速（更少调用，抗限流）</option>
+                                    <option value="standard">标准（更完整，调用更多）</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button class="btn-primary" onclick="generateTradingAgentsReport()">生成报告</button>
+                            <button class="btn-secondary" onclick="diagnoseTradingAgents()">诊断</button>
+                        </div>
+                        <div class="settings-hint" id="taHint">提示：先到“设置 → TradingAgents”填写 OpenAI API Key，然后再生成报告。</div>
+                    </div>
+
+                    <div class="analysis-results">
+                        <div class="analysis-result-header">
+                            <h3>报告内容</h3>
+                            <div class="result-meta" id="taMeta"></div>
+                        </div>
+                        <div class="analysis-content" id="taReportContent">请输入股票代码后生成报告。</div>
+                    </div>
                 </div>
             </div>
         </div>
