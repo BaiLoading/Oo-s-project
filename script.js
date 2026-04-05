@@ -957,7 +957,7 @@ async function analyzeStock() {
         let stockData, quote;
         
         // 1) 行情快照（报价）
-        const quoteRes = await apiFetch(`/api/stock/full?code=${stockCode}`);
+        const quoteRes = await apiFetch(`/api/stock/full?code=${stockCode}&market=${stockType}`);
         if (!quoteRes.ok) {
             let errMsg = `请求失败(${quoteRes.status})`;
             try { const e = await quoteRes.json(); if (e && e.error) errMsg = e.error; } catch (_) {}
@@ -968,7 +968,7 @@ async function analyzeStock() {
         quote = quoteData.quote;
         
         // 2) K线历史数据
-        const klineRes = await apiFetch(`/api/stock/kline?code=${stockCode}&interval=${currentKlinePeriod}`);
+        const klineRes = await apiFetch(`/api/stock/kline?code=${stockCode}&interval=${currentKlinePeriod}&market=${stockType}`);
         if (!klineRes.ok) {
             let errMsg = `K线请求失败(${klineRes.status})`;
             try { const e = await klineRes.json(); if (e && e.error) errMsg = e.error; } catch (_) {}
@@ -1573,10 +1573,15 @@ async function addPosition() {
         return;
     }
     
+    // Auto-detect market from code pattern
+    let market = 'us';
+    if (/^\d{6}$/.test(code)) market = 'cn';
+    else if (/^(BTC|ETH|SOL|XRP|ADA|DOT|AVAX|MATIC|LINK|UNI|USDT)$/i.test(code)) market = 'crypto';
+    
     let stockName = getStockName(code);
     
     try {
-        const response = await fetch(`/api/stock/quote?code=${code}`);
+        const response = await fetch(`/api/stock/quote?code=${code}&market=${market}`);
         const data = await response.json();
         if (data.name) {
             stockName = data.name;
@@ -1621,7 +1626,8 @@ async function addPosition() {
 async function updatePositionPrices() {
     for (let position of holdings) {
         try {
-            const response = await fetch(`/api/stock/quote?code=${position.code}`);
+            const pm = position.market || (/^\d{6}$/.test(position.code) ? 'cn' : 'us');
+            const response = await fetch(`/api/stock/quote?code=${position.code}&market=${pm}`);
             const data = await response.json();
             if (data.price) {
                 position.currentPrice = data.price;
