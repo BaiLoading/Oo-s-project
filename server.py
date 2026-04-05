@@ -1011,37 +1011,77 @@ def get_news():
 # ============================================================
 # 个股相关新闻 (akshare)
 # ============================================================
-def get_related_news(stock_code, stock_name):
+def get_related_news(stock_code, stock_name, market="cn"):
+    # ---- A股：akshare ----
+    if market == "cn" and stock_code.isdigit() and len(stock_code) == 6:
+        try:
+            import akshare as ak, time
+            time.sleep(0.2)
+            df = ak.stock_news_em(symbol=stock_code)
+            if df is not None and len(df) > 0:
+                news_list = []
+                for _, row in df.head(8).iterrows():
+                    news_list.append({
+                        "id":     random.randint(10000, 99999),
+                        "title":  str(row.get("新闻标题", "")),
+                        "source": str(row.get("新闻来源", "东方财富")),
+                        "type":   "新闻",
+                        "time":   str(row.get("发布时间", "刚刚")),
+                        "detail": f"关于「{stock_name}」的新闻报道。",
+                    })
+                return news_list
+        except Exception as e:
+            print(f"[!] A股新闻失败: {e}")
+        return [{"id": 1, "title": f"{stock_name} 相关新闻暂无数据", "source": "系统",
+                 "type": "新闻", "time": "刚刚", "detail": "暂无数据"}]
+
+    # ---- 美股 / 港股 / 加密货币：yfinance ----
     try:
-        import akshare as ak, time
-        time.sleep(0.2)
-        df = ak.stock_news_em(symbol=stock_code)
-        if df is not None and len(df) > 0:
+        import yfinance as yf
+        ticker_sym = stock_code
+        # yfinance 需要 .OB 后缀用于美股粉单
+        ticker = yf.Ticker(ticker_sym)
+        news_items = ticker.news or []
+        if news_items:
             news_list = []
-            for _, row in df.head(8).iterrows():
+            for item in news_items[:8]:
+                t = item.get("title", "")
+                if not t:
+                    continue
+                from datetime import datetime as _dt
+                ts = item.get("providerPublishTime", 0)
+                age = _dt.now() - _dt.fromtimestamp(ts) if ts else None
+                time_str = "刚刚"
+                if age:
+                    if age.seconds < 3600:
+                        time_str = f"{age.seconds // 60}分钟前"
+                    elif age.days < 1:
+                        time_str = f"{age.hours}小时前"
+                    else:
+                        time_str = f"{age.days}天前"
                 news_list.append({
-                    "id":     random.randint(10000, 99999),
-                    "title":  str(row.get("新闻标题", "")),
-                    "source": str(row.get("新闻来源", "东方财富")),
+                    "id":     item.get("uuid", random.randint(10000, 99999)),
+                    "title":  t,
+                    "source": item.get("publisher", "Yahoo Finance"),
                     "type":   "新闻",
-                    "time":   str(row.get("发布时间", "刚刚")),
-                    "detail": f"关于「{stock_name}」的新闻报道。",
+                    "time":   time_str,
+                    "detail": f"关于「{stock_name}」({stock_code})的市场新闻。",
+                    "url":    item.get("link", ""),
                 })
             return news_list
     except Exception as e:
-        print(f"[!] 个股新闻失败: {e}")
-    return [
-        {"id": 1, "title": f"{stock_name} 相关新闻暂无数据", "source": "系统",
-         "type": "新闻", "time": "刚刚", "detail": "暂无数据"}
-    ]
+        print(f"[!] US stock news failed for {stock_code}: {e}")
+    return [{"id": 1, "title": f"{stock_name}({stock_code}) 相关新闻暂无数据", "source": "系统",
+             "type": "新闻", "time": "刚刚", "detail": "暂无数据"}]
 
 @app.route("/api/stock/related-news")
 def api_related_news():
-    code = request.args.get("code")
-    name = request.args.get("name", code or "")
-    if not code or not code.isdigit() or len(code) != 6:
-        return jsonify({"error": "请提供有效A股代码"}), 400
-    return jsonify({"success": True, "data": get_related_news(code, name),
+    code   = request.args.get("code")
+    market = request.args.get("market", "cn").strip().lower()
+    name   = request.args.get("name", code or "")
+    if not code:
+        return jsonify({"error": "请提供股票代码"}), 400
+    return jsonify({"success": True, "data": get_related_news(code, name, market),
                     "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
 
@@ -1075,11 +1115,12 @@ def get_income():
     obb = _get_obb()
     if obb:
         try:
-            data = obb.equity.fundamental.income(symbol, period=period, limit=limit)
+            sym = format_symbol(symbol)
+            data = obb.equity.fundamental.income(sym, period=period, limit=limit)
             rows = [_row_dict(r, INCOME_FIELDS) for r in data.results]
-            return jsonify({"success": True, "symbol": symbol, "period": period, "data": rows})
+            return jsonify({"success": True, "symbol": sym, "period": period, "data": rows})
         except Exception as e:
-            print(f"Income Error: {e}")
+            print(f"[!] Income Error: {e}")
     return jsonify({"success": False, "error": "OpenBB 不可用"}), 500
 
 @app.route("/api/stock/financial/balance")
@@ -1092,11 +1133,12 @@ def get_balance():
     obb = _get_obb()
     if obb:
         try:
-            data = obb.equity.fundamental.balance(symbol, period=period, limit=limit)
+            sym = format_symbol(symbol)
+            data = obb.equity.fundamental.balance(sym, period=period, limit=limit)
             rows = [_row_dict(r, BALANCE_FIELDS) for r in data.results]
-            return jsonify({"success": True, "symbol": symbol, "period": period, "data": rows})
+            return jsonify({"success": True, "symbol": sym, "period": period, "data": rows})
         except Exception as e:
-            print(f"Balance Error: {e}")
+            print(f"[!] Balance Error: {e}")
     return jsonify({"success": False, "error": "OpenBB 不可用"}), 500
 
 @app.route("/api/stock/financial/cash")
@@ -1109,21 +1151,22 @@ def get_cash():
     obb = _get_obb()
     if obb:
         try:
-            data = obb.equity.fundamental.cash(symbol, period=period, limit=limit)
+            sym = format_symbol(symbol)
+            data = obb.equity.fundamental.cash(sym, period=period, limit=limit)
             rows = [_row_dict(r, CASH_FIELDS) for r in data.results]
-            return jsonify({"success": True, "symbol": symbol, "period": period, "data": rows})
+            return jsonify({"success": True, "symbol": sym, "period": period, "data": rows})
         except Exception as e:
-            print(f"Cash Error: {e}")
+            print(f"[!] Cash Error: {e}")
     return jsonify({"success": False, "error": "OpenBB 不可用"}), 500
 
 @app.route("/api/stock/financial")
 def get_financial():
-    """兼容旧端点 → 用 akshare 获取个股财务数据"""
-    code = request.args.get("code")
-    name = request.args.get("name", code or "")
-    if not code or not code.isdigit() or len(code) != 6:
-        return jsonify({"error": "请提供有效A股代码"}), 400
-    return jsonify({"success": True, "data": {}})
+    """兼容旧端点 → 统一走 /api/stock/financial/income"""
+    code   = request.args.get("code")
+    period = request.args.get("period", "annual")
+    if not code:
+        return jsonify({"error": "请提供股票代码"}), 400
+    return get_income()
 
 
 # ============================================================
@@ -1412,33 +1455,112 @@ def ai_analyze():
 @app.route("/api/ai/analysis", methods=["GET", "POST"])
 def ai_analysis():
     if request.method == "POST":
-        data = request.json or {}
+        data     = request.json or {}
         code     = data.get("code")
+        market   = data.get("market", "cn").strip().lower()
         holdings = data.get("holdings", [])
     else:
-        code     = request.args.get("code")
+        code   = request.args.get("code")
+        market = request.args.get("market", "cn").strip().lower()
         holdings = []
-    if not code or not code.isdigit() or len(code) != 6:
-        return jsonify({"error": "请提供有效A股代码"}), 400
+
+    if not code:
+        return jsonify({"error": "请提供股票代码"}), 400
+
+    # ---- A股路径 ----
+    if market == "cn" and code.isdigit() and len(code) == 6:
+        try:
+            ak = get_complete_akshare_data(code)
+            if not ak:
+                return jsonify({"error": "获取数据失败"}), 500
+            en = _calc_enhanced_analysis(ak["data"], pe=ak.get("pe"), pb=ak.get("pb"),
+                                          holdings=holdings)
+            return jsonify({
+                "success": True,
+                "stock": {"name": ak["name"], "code": code,
+                          "price": ak["price"], "change": ak["change"],
+                          "changePercent": ak["changePercent"],
+                          "pe": ak.get("pe"), "pb": ak.get("pb"),
+                          "volume": ak["volume"]},
+                "analysis": en,
+                "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+        except Exception as e:
+            print(f"[!] A股 AI Analysis Error: {e}")
+            return jsonify({"error": f"AI 分析失败: {e}"}), 500
+
+    # ---- 美股 / 港股 / 加密货币 路径（via OpenBB Package）----
+    obb = _get_obb()
+    if not obb:
+        return jsonify({"error": "OpenBB 不可用"}), 503
+
     try:
-        ak  = get_complete_akshare_data(code)
-        if not ak:
-            return jsonify({"error": "获取数据失败"}), 500
-        en  = _calc_enhanced_analysis(ak["data"], pe=ak.get("pe"), pb=ak.get("pb"),
-                                      holdings=holdings)
+        sym = format_symbol(code)
+        # 并行获取历史价格和估值指标（超时保护）
+        df_hist, herr = _ob_call(
+            lambda: obb.equity.price.historical(sym, interval="1d", provider="yfinance").to_dataframe(),
+            timeout=20)
+        m_data, merr = _ob_call(
+            lambda: obb.equity.fundamental.metrics(sym, provider="yfinance", limit=1),
+            timeout=15)
+
+        if df_hist is None or (hasattr(df_hist, 'empty') and df_hist.empty):
+            return jsonify({"error": f"无法获取 {code} 的历史数据: {herr or 'no data'}"}), 502
+
+        pe_val, pb_val = None, None
+        if m_data and hasattr(m_data, 'results') and m_data.results:
+            r = m_data.results[0].model_dump()
+            pe_val = to_float_2(r.get('pe_ratio'))
+            pb_val = to_float_2(r.get('price_to_book'))
+
+        # 转换为 kline 格式（list of dicts）
+        kline_data = []
+        for idx, row in df_hist.tail(365).iterrows():
+            kline_data.append({
+                "date":   idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+                "open":   to_float_2(row.get('open')),
+                "high":   to_float_2(row.get('high')),
+                "low":    to_float_2(row.get('low')),
+                "close":  to_float_2(row.get('close')),
+                "volume": int(to_float(row.get('volume')) or 0),
+            })
+
+        en = _calc_enhanced_analysis(kline_data, pe=pe_val, pb=pb_val, holdings=holdings)
+
+        # 获取最新报价
+        last = df_hist.iloc[-1]
+        prev = df_hist.iloc[-2] if len(df_hist) > 1 else last
+        price = to_float_2(last.get('close'))
+        pre_c = to_float_2(prev.get('close'))
+        chg   = round(price - pre_c, 2) if price and pre_c else 0
+        pct   = round(chg / pre_c * 100, 2) if pre_c else 0
+
+        qt_name = sym
+        try:
+            qt_df = obb.equity.price.quote(sym).to_dataframe()
+            if not qt_df.empty:
+                qt_name = qt_df.iloc[0].get('name', sym)
+        except:
+            pass
+
         return jsonify({
             "success": True,
-            "stock": {"name": ak["name"], "code": code,
-                      "price": ak["price"], "change": ak["change"],
-                      "changePercent": ak["changePercent"],
-                      "pe": ak.get("pe"), "pb": ak.get("pb"),
-                      "volume": ak["volume"]},
+            "stock": {
+                "name":          qt_name,
+                "code":          code,
+                "price":         price,
+                "change":        chg,
+                "changePercent": pct,
+                "pe":            pe_val,
+                "pb":            pb_val,
+                "volume":        int(to_float(last.get('volume')) or 0),
+            },
             "analysis": en,
             "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
     except Exception as e:
-        print(f"AI Analysis Error: {e}")
-        return jsonify({"error": "AI 分析失败"}), 500
+        print(f"[!] US Stock AI Analysis Error: {e}")
+        return jsonify({"error": f"AI 分析失败: {e}"}), 500
 
 @app.route("/api/enhanced/analysis", methods=["GET", "POST"])
 def enhanced_analysis():
