@@ -789,6 +789,27 @@ def get_stock_full():
         ak_data = get_complete_akshare_data(stock_code, days=days)
         if ak_data:
             d = ak_data
+            # 补充获取 A股 PE/PB（从雪球实时数据）
+            pe_val, pb_val = d.get("pe"), d.get("pb")
+            if pe_val is None or pb_val is None:
+                try:
+                    import akshare as ak, time
+                    xq_sym = f"SH{stock_code}" if stock_code.startswith("6") else f"SZ{stock_code}"
+                    time.sleep(0.2)
+                    spot = ak.stock_individual_spot_xq(symbol=xq_sym)
+                    if spot is not None and len(spot) > 0:
+                        sd = dict(zip(spot["item"], spot["value"]))
+                        pe_str = sd.get("市盈率")
+                        pb_str = sd.get("市净率")
+                        if pe_val is None and pe_str:
+                            try: pe_val = float(pe_str)
+                            except: pass
+                        if pb_val is None and pb_str:
+                            try: pb_val = float(pb_str)
+                            except: pass
+                except Exception as e:
+                    print(f"[!] A股 PE/PB fetch failed: {e}")
+
             quote = {
                 # server_openBB 格式
                 "last_price":    d["price"],
@@ -808,11 +829,10 @@ def get_stock_full():
                 "price":         d["price"],
                 "preClose":      d.get("preClose"),
                 "change_percent": d["changePercent"] / 100 if d.get("changePercent") else 0,
+                "pe":            pe_val,
+                "pb":            pb_val,
+                "peRatio":       pe_val,
             }
-            # 补充 name
-            for k in ["name", "code", "pe", "pb"]:
-                if k in d:
-                    quote[k] = d[k]
             return jsonify({"quote": quote, "kline": d.get("data", [])})
 
     # ---- US stocks via OpenBB Package directly ----
@@ -867,6 +887,19 @@ def get_stock_full():
                     "last_price":    price,
                     "change_percent": pct / 100 if pct else 0,
                 }
+                # 获取估值指标 (PE, EPS, MarketCap)
+                m_df, merr = _ob_call(
+                    lambda: obb.equity.fundamental.metrics(sym, provider='yfinance', limit=1).to_dataframe(),
+                    timeout=15)
+                if m_df is not None and hasattr(m_df, 'iloc') and len(m_df) > 0:
+                    mr = m_df.iloc[0]
+                    quote.update({
+                        "peRatio":      to_float_2(mr.get('pe_ratio')),
+                        "eps":          to_float_2(mr.get('eps_ttm')),
+                        "marketCap":    to_float_2(mr.get('market_cap')),
+                        "dividendYield": to_float_2(mr.get('dividend_yield')),
+                        "beta":         to_float_2(mr.get('beta')),
+                    })
                 if hasattr(qt_df, 'iloc') and len(qt_df) > 0:
                     r = qt_df.iloc[0]
                     quote.update({
@@ -874,6 +907,7 @@ def get_stock_full():
                         "ask":      to_float_2(r.get('ask')),
                         "yearHigh": to_float_2(r.get('year_high')),
                         "yearLow":  to_float_2(r.get('year_low')),
+                        "provider":  "yfinance",
                     })
                 return jsonify({"quote": quote, "kline": kline})
             except Exception as e:
@@ -1337,6 +1371,57 @@ def get_technical_dashboard():
                 "close": to_float(row["close"]),
             })
         result["kline"] = kline
+
+        # ---- 支撑位与压力位 ----
+        try:
+            close_cur = to_float(df["close"].iloc[-1])
+            fib_df = obb.technical.fib(data=df, target="close").to_dataframe()
+            fib_levels = []
+            for _, row in fib_df.iterrows():
+                lvl = str(row.get("Level", ""))
+                price = to_float(row.get("Price"))
+                if price:
+                    is_resistance = bool(close_cur and close_cur < price)
+                    fib_levels.append({
+                        "level":    lvl.replace("%",""),
+                        "price":    price,
+                        "type":     "resistance" if is_resistance else "support",
+                        "distance": round((close_cur - price) / close_cur * 100, 2) if close_cur else 0
+                    })
+
+            atr_df = obb.technical.atr(data=df, window=14).to_dataframe()
+            atr_val = to_float(atr_df.iloc[-1].get("ATRr_14")) if len(atr_df) else 0
+            atr_levels = {}
+            if atr_val:
+                atr_levels = {
+                    "atr":        round(atr_val, 2),
+                    "resistance1": round(close_cur + 1.5 * atr_val, 2),
+                    "resistance2": round(close_cur + 2.0 * atr_val, 2),
+                    "support1":   round(close_cur - 1.5 * atr_val, 2),
+                    "support2":   round(close_cur - 2.0 * atr_val, 2),
+                }
+
+            dc_df = obb.technical.donchian(data=df).to_dataframe()
+            dc_lower = [c for c in dc_df.columns if c.startswith('DCL')]
+            dc_mid   = [c for c in dc_df.columns if c.startswith('DCM')]
+            dc_upper = [c for c in dc_df.columns if c.startswith('DCU')]
+            donchian = {}
+            if dc_lower and dc_mid and dc_upper:
+                donchian = {
+                    "lower":   to_float(dc_df[dc_lower[0]].iloc[-1]),
+                    "middle":  to_float(dc_df[dc_mid[0]].iloc[-1]),
+                    "upper":   to_float(dc_df[dc_upper[0]].iloc[-1]),
+                }
+
+            result["support_resistance"] = {
+                "fib":      fib_levels,
+                "atr":      atr_levels,
+                "donchian": donchian,
+            }
+        except Exception as e:
+            print(f"Support/Resistance Error: {e}")
+            result["support_resistance"] = {"fib": [], "atr": {}, "donchian": {}}
+
         return jsonify(result)
     except Exception as e:
         print(f"Dashboard Error: {e}")
@@ -1526,6 +1611,58 @@ def ai_analysis():
             })
 
         en = _calc_enhanced_analysis(kline_data, pe=pe_val, pb=pb_val, holdings=holdings)
+
+        # ---- OpenBB 技术分析：支撑位与压力位 ----
+        try:
+            close_cur = to_float_2(df_hist["close"].iloc[-1])
+            fib_df = obb.technical.fib(data=df_hist, target="close").to_dataframe()
+            fib_levels = []
+            for _, row in fib_df.iterrows():
+                lvl = str(row.get("Level", ""))
+                price = to_float_2(row.get("Price"))
+                if price:
+                    # 当前价在区间上方时，level 下方是支撑；当前价在区间下方时，level 上方是压力
+                    is_resistance = bool(close_cur and close_cur < price)
+                    fib_levels.append({
+                        "level":    lvl.replace("%",""),
+                        "price":    price,
+                        "type":     "resistance" if is_resistance else "support",
+                        "distance": round((close_cur - price) / close_cur * 100, 2) if close_cur else 0
+                    })
+
+            atr_df = obb.technical.atr(data=df_hist, window=14).to_dataframe()
+            atr_val = to_float_2(atr_df.iloc[-1].get("ATRr_14")) if len(atr_df) else 0
+            atr_levels = {}
+            if atr_val:
+                atr_levels = {
+                    "atr":        round(atr_val, 2),
+                    "resistance1": round(close_cur + 1.5 * atr_val, 2),
+                    "resistance2": round(close_cur + 2.0 * atr_val, 2),
+                    "support1":   round(close_cur - 1.5 * atr_val, 2),
+                    "support2":   round(close_cur - 2.0 * atr_val, 2),
+                }
+
+            dc_df = obb.technical.donchian(data=df_hist).to_dataframe()
+            # 列名如 DCL_20_20, DCM_20_20, DCU_20_20
+            dc_lower = [c for c in dc_df.columns if c.startswith('DCL')]
+            dc_mid   = [c for c in dc_df.columns if c.startswith('DCM')]
+            dc_upper = [c for c in dc_df.columns if c.startswith('DCU')]
+            donchian = {}
+            if dc_lower and dc_mid and dc_upper:
+                donchian = {
+                    "lower":  to_float_2(dc_df[dc_lower[0]].iloc[-1]),
+                    "middle": to_float_2(dc_df[dc_mid[0]].iloc[-1]),
+                    "upper":  to_float_2(dc_df[dc_upper[0]].iloc[-1]),
+                }
+
+            en["support_resistance"]["openbb"] = {
+                "fib":      fib_levels,
+                "atr":      atr_levels,
+                "donchian": donchian,
+            }
+            en["support_resistance"]["currentPrice"] = close_cur
+        except Exception as e:
+            print(f"OpenBB SR Error: {e}")
 
         # 获取最新报价
         last = df_hist.iloc[-1]
