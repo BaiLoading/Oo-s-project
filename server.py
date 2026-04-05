@@ -559,10 +559,216 @@ def _get_obb():
     if _obb is None:
         try:
             from openbb import obb as _o
+            try:
+                import openbb.package.equity
+            except Exception as e:
+                print(f"[!] OpenBB package 不可用（extensions/build 可能损坏）: {e}")
+                return None
             _obb = _o
         except Exception as e:
             print(f"[!] OpenBB package 导入失败: {e}")
     return _obb
+
+def _ob_equity_quote_df(obb, symbol):
+    try:
+        return obb.equity.price.quote(symbol, provider="yfinance").to_dataframe()
+    except TypeError:
+        return obb.equity.price.quote(symbol).to_dataframe()
+
+def _ob_equity_hist_df(obb, symbol, interval):
+    try:
+        return obb.equity.price.historical(symbol, interval=interval, provider="yfinance").to_dataframe()
+    except TypeError:
+        return obb.equity.price.historical(symbol, interval=interval).to_dataframe()
+
+def _http_get_json(url, timeout=10):
+    try:
+        from curl_cffi import requests as creq
+        r = creq.get(url, timeout=timeout, impersonate="chrome")
+        if getattr(r, "status_code", 0) >= 400:
+            return None, f"HTTP {getattr(r, 'status_code', 'unknown')}"
+        return r.json(), None
+    except Exception as e:
+        try:
+            import requests
+            r = requests.get(url, timeout=timeout)
+            r.raise_for_status()
+            return r.json(), None
+        except Exception as e2:
+            return None, str(e2 or e)
+
+def _yahoo_quote_and_kline(stock_code, days=365):
+    sym = (stock_code or "").strip()
+    if not sym:
+        return None, None, "empty symbol"
+
+    q_url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={sym}"
+    qj, qerr = _http_get_json(q_url, timeout=10)
+    if qerr:
+        return None, None, qerr
+
+    qr = (((qj or {}).get("quoteResponse") or {}).get("result") or [])
+    q0 = qr[0] if qr else {}
+
+    range_str = "1y" if int(days or 365) <= 365 else "5y"
+    c_url = f"https://query2.finance.yahoo.com/v8/finance/chart/{sym}?range={range_str}&interval=1d&includePrePost=false&events=div%2Csplits"
+    cj, cerr = _http_get_json(c_url, timeout=12)
+    if cerr:
+        return None, None, cerr
+
+    cr = (((cj or {}).get("chart") or {}).get("result") or [])
+    c0 = cr[0] if cr else {}
+    ts = c0.get("timestamp") or []
+    ind = (((c0.get("indicators") or {}).get("quote") or []) or [])
+    qarr = ind[0] if ind else {}
+
+    opens = qarr.get("open") or []
+    highs = qarr.get("high") or []
+    lows = qarr.get("low") or []
+    closes = qarr.get("close") or []
+    vols = qarr.get("volume") or []
+
+    kline = []
+    for i in range(min(len(ts), len(closes))):
+        t = ts[i]
+        if t is None:
+            continue
+        dt = datetime.fromtimestamp(int(t)).strftime("%Y-%m-%d")
+        kline.append({
+            "date": dt,
+            "open": to_float_2(opens[i] if i < len(opens) else None),
+            "high": to_float_2(highs[i] if i < len(highs) else None),
+            "low": to_float_2(lows[i] if i < len(lows) else None),
+            "close": to_float_2(closes[i] if i < len(closes) else None),
+            "volume": int(to_float(vols[i] if i < len(vols) else None) or 0),
+        })
+    if kline:
+        kline = kline[-int(days or 365):]
+
+    price = to_float_2(q0.get("regularMarketPrice") or q0.get("postMarketPrice") or q0.get("preMarketPrice"))
+    pre_c = to_float_2(q0.get("regularMarketPreviousClose"))
+    chg = to_float_2(q0.get("regularMarketChange"))
+    pct = to_float_2(q0.get("regularMarketChangePercent"))
+
+    quote = {
+        "name": q0.get("shortName") or q0.get("longName") or sym,
+        "code": stock_code,
+        "price": price,
+        "change": chg,
+        "changePercent": pct,
+        "open": to_float_2(q0.get("regularMarketOpen")),
+        "high": to_float_2(q0.get("regularMarketDayHigh")),
+        "low": to_float_2(q0.get("regularMarketDayLow")),
+        "volume": int(to_float(q0.get("regularMarketVolume")) or 0),
+        "prev_close": pre_c,
+        "preClose": pre_c,
+        "last_price": price,
+        "change_percent": (pct / 100) if pct is not None else 0,
+        "bid": to_float_2(q0.get("bid")),
+        "ask": to_float_2(q0.get("ask")),
+        "yearHigh": to_float_2(q0.get("fiftyTwoWeekHigh")),
+        "yearLow": to_float_2(q0.get("fiftyTwoWeekLow")),
+        "peRatio": to_float_2(q0.get("trailingPE")),
+        "eps": to_float_2(q0.get("epsTrailingTwelveMonths")),
+        "marketCap": to_float_2(q0.get("marketCap")),
+        "dividendYield": to_float_2(q0.get("trailingAnnualDividendYield")),
+        "beta": to_float_2(q0.get("beta")),
+        "provider": "yahoo",
+        "_source": "yahoo",
+    }
+
+    if price is None and kline:
+        quote["price"] = kline[-1].get("close")
+        quote["last_price"] = quote["price"]
+    return quote, kline, None
+
+def _yf_quote_and_kline(stock_code, days=365):
+    q, k, e = _yahoo_quote_and_kline(stock_code, days=days)
+    if not e and q is not None and k is not None:
+        return q, k, None
+    try:
+        import yfinance as yf
+    except Exception as e:
+        return None, None, str(e)
+
+    sym = (stock_code or "").strip()
+    ticker = yf.Ticker(sym)
+
+    hist_days = max(int(days or 365), 10)
+    hist, herr = _ob_call(lambda: ticker.history(period=f"{hist_days}d", interval="1d", auto_adjust=False), timeout=12)
+    if herr or hist is None:
+        return None, None, herr or "No yfinance history"
+    if getattr(hist, "empty", True):
+        return None, None, "No yfinance history"
+
+    try:
+        hist = hist.dropna(subset=["Close"])
+    except Exception:
+        pass
+    if getattr(hist, "empty", True):
+        return None, None, "No yfinance close data"
+
+    last = hist.iloc[-1]
+    prev = hist.iloc[-2] if len(hist) > 1 else last
+
+    def _v(x):
+        try:
+            return float(x)
+        except:
+            return None
+
+    price = to_float_2(_v(last.get("Close")))
+    pre_c = to_float_2(_v(prev.get("Close")))
+    chg = round(price - pre_c, 2) if price is not None and pre_c is not None else 0
+    pct = round(chg / pre_c * 100, 2) if pre_c else 0
+
+    info, ierr = _ob_call(lambda: getattr(ticker, "info", {}) or {}, timeout=8)
+    if ierr or not isinstance(info, dict):
+        info = {}
+
+    quote = {
+        "name": info.get("shortName") or info.get("longName") or sym,
+        "code": stock_code,
+        "price": price,
+        "change": chg,
+        "changePercent": pct,
+        "open": to_float_2(_v(last.get("Open"))),
+        "high": to_float_2(_v(last.get("High"))),
+        "low": to_float_2(_v(last.get("Low"))),
+        "volume": int(to_float(_v(last.get("Volume"))) or 0),
+        "prev_close": pre_c,
+        "preClose": pre_c,
+        "last_price": price,
+        "change_percent": pct / 100 if pct else 0,
+        "bid": to_float_2(info.get("bid")),
+        "ask": to_float_2(info.get("ask")),
+        "yearHigh": to_float_2(info.get("fiftyTwoWeekHigh")),
+        "yearLow": to_float_2(info.get("fiftyTwoWeekLow")),
+        "peRatio": to_float_2(info.get("trailingPE")),
+        "eps": to_float_2(info.get("trailingEps")),
+        "marketCap": to_float_2(info.get("marketCap")),
+        "dividendYield": to_float_2(info.get("dividendYield")),
+        "beta": to_float_2(info.get("beta")),
+        "provider": "yfinance",
+        "_source": "yfinance",
+    }
+
+    kline = []
+    try:
+        tail_df = hist.tail(int(days or 365))
+    except Exception:
+        tail_df = hist
+    for idx, row in tail_df.iterrows():
+        kline.append({
+            "date": idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+            "open": to_float_2(_v(row.get("Open"))),
+            "high": to_float_2(_v(row.get("High"))),
+            "low": to_float_2(_v(row.get("Low"))),
+            "close": to_float_2(_v(row.get("Close"))),
+            "volume": int(to_float(_v(row.get("Volume"))) or 0),
+        })
+
+    return quote, kline, None
 
 # ============================================================
 # 冲突接口 → 返回双格式字段
@@ -613,10 +819,10 @@ def get_stock_quote():
     if obb and not stock_code.isdigit():
         try:
             sym = format_symbol(stock_code)
-            qt_df, err = _ob_call(lambda: obb.equity.price.quote(sym).to_dataframe(), timeout=15)
+            qt_df, err = _ob_call(lambda: _ob_equity_quote_df(obb, sym), timeout=15)
             if err or qt_df is None:
                 print(f"[!] US quote failed for {sym}: {err}")
-                return jsonify({"error": f"OpenBB quote timeout/failed for {stock_code}"}), 504
+                qt_df = None
             has_df = hasattr(qt_df, 'iloc') and len(qt_df) > 0
             if has_df:
                 row = qt_df.iloc[0]
@@ -648,10 +854,15 @@ def get_stock_quote():
                     "yearLow":       to_float_2(row.get('year_low')),
                     "_source":       "openbb",
                 })
-            else:
-                return jsonify({"error": f"No quote data for {stock_code}"}), 404
+            qt_df = None
         except Exception as e:
             print(f"[!] US stock quote exception: {e}")
+
+    if not stock_code.isdigit():
+        quote, _, err = _yf_quote_and_kline(stock_code, days=60)
+        if err or quote is None:
+            return jsonify({"error": f"获取数据失败：{err or 'no data'}"}), 502
+        return jsonify(quote)
 
     return jsonify({"error": "仅支持A股6位代码或美股代码"}), 404
 
@@ -710,39 +921,37 @@ def get_stock_kline():
                 intrv = {'1d': '1d', '1w': '1W', '1M': '1M'}.get(interval, '1d')
                 fetch_d = 365 if intrv in ['1W', '1M'] else days * 2
                 df, err = _ob_call(
-                    lambda: obb.equity.price.historical(sym, interval=intrv).to_dataframe(),
+                    lambda: _ob_equity_hist_df(obb, sym, intrv),
                     timeout=20)
-                if err or df is None:
-                    return jsonify({"error": f"OpenBB kline timeout: {err}"}), 504
-                has_df = hasattr(df, 'empty') and not df.empty
-                if not has_df:
-                    return jsonify({"error": "No kline data"}), 404
-                closes = df['close'].tolist()
-                rsi_list = _calc_rsi(closes, 14)
-                kline = []
-                for i, (idx, row) in enumerate(df.tail(days).iterrows()):
-                    kline.append({
-                        "date":   idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
-                        "open":   to_float_2(row.get('open')),
-                        "high":   to_float_2(row.get('high')),
-                        "low":    to_float_2(row.get('low')),
-                        "close":  to_float_2(row.get('close')),
-                        "volume": int(to_float(row.get('volume')) or 0),
-                        "rsi":    rsi_list[i] if i < len(rsi_list) else None,
-                        "RSI":    rsi_list[i] if i < len(rsi_list) else None,
+                if not err and df is not None and hasattr(df, 'empty') and not df.empty:
+                    closes = df['close'].tolist()
+                    rsi_list = _calc_rsi(closes, 14)
+                    kline = []
+                    for i, (idx, row) in enumerate(df.tail(days).iterrows()):
+                        kline.append({
+                            "date":   idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+                            "open":   to_float_2(row.get('open')),
+                            "high":   to_float_2(row.get('high')),
+                            "low":    to_float_2(row.get('low')),
+                            "close":  to_float_2(row.get('close')),
+                            "volume": int(to_float(row.get('volume')) or 0),
+                            "rsi":    rsi_list[i] if i < len(rsi_list) else None,
+                            "RSI":    rsi_list[i] if i < len(rsi_list) else None,
+                        })
+                    last = df.iloc[-1]; pre_col = df.iloc[-2]['close'] if len(df) > 1 else None
+                    price = to_float_2(last.get('close')); pre_c = to_float_2(pre_col)
+                    chg = round(price - pre_c, 2) if price and pre_c else 0
+                    pct = round(chg / pre_c * 100, 2) if pre_c else 0
+                    return jsonify({
+                        "code":     stock_code, "interval": interval,
+                        "kline":    kline, "data": kline,
+                        "name":     str(last.get('name', stock_code)),
+                        "symbol":   stock_code, "price": price,
+                        "change":   chg, "changePercent": pct,
+                        "volume":   int(to_float(last.get('volume')) or 0),
                     })
-                last = df.iloc[-1]; pre_col = df.iloc[-2]['close'] if len(df) > 1 else None
-                price = to_float_2(last.get('close')); pre_c = to_float_2(pre_col)
-                chg = round(price - pre_c, 2) if price and pre_c else 0
-                pct = round(chg / pre_c * 100, 2) if pre_c else 0
-                return jsonify({
-                    "code":     stock_code, "interval": interval,
-                    "kline":    kline, "data": kline,
-                    "name":     str(last.get('name', stock_code)),
-                    "symbol":   stock_code, "price": price,
-                    "change":   chg, "changePercent": pct,
-                    "volume":   int(to_float(last.get('volume')) or 0),
-                })
+                if err:
+                    print(f"[!] US kline failed for {sym}: {err}")
             except Exception as e:
                 return jsonify({"error": f"OpenBB kline failed: {e}"}), 502
 
@@ -772,6 +981,28 @@ def get_stock_kline():
             except Exception as e:
                 return jsonify({"error": f"Crypto kline failed: {e}"}), 502
 
+    if not stock_code.isdigit():
+        _, kline, err = _yf_quote_and_kline(stock_code, days=days)
+        if err or kline is None:
+            return jsonify({"error": f"获取数据失败：{err or 'no data'}"}), 502
+        closes = [k["close"] for k in kline if k.get("close") is not None]
+        rsi = _calc_rsi(closes, 14) if len(closes) >= 15 else None
+        enriched = []
+        rsi_i = 0
+        for k in kline:
+            rsi_v = None
+            if rsi and k.get("close") is not None and rsi_i < len(rsi):
+                rsi_v = rsi[rsi_i]
+                rsi_i += 1
+            enriched.append({**k, "rsi": rsi_v, "RSI": rsi_v})
+        return jsonify({
+            "code": stock_code,
+            "interval": interval,
+            "kline": enriched,
+            "symbol": stock_code,
+            "data": enriched,
+        })
+
     return jsonify({"error": "数据获取失败"}), 404
 
 
@@ -781,6 +1012,7 @@ def get_stock_full():
     print("[FULL] CALLED code=" + str(request.args.get("code")) + " market=" + str(request.args.get("market")))
     stock_code = request.args.get("code")
     days = int(request.args.get("days", 365))
+    market = (request.args.get("market") or "").strip().lower()
 
     if not stock_code:
         return jsonify({"error": "请提供股票代码"}), 400
@@ -842,79 +1074,81 @@ def get_stock_full():
             try:
                 sym = format_symbol(stock_code)
                 # Use timeout to prevent Flask from hanging
-                qt_df, qerr = _ob_call(lambda: obb.equity.price.quote(sym).to_dataframe(), timeout=15)
-                if qerr or qt_df is None:
-                    return jsonify({"error": f"OpenBB quote failed: {qerr or 'no data'}"}), 502
-                df, herr = _ob_call(lambda: obb.equity.price.historical(sym, interval='1d').to_dataframe(), timeout=15)
-                if herr or df is None or (hasattr(df, 'empty') and df.empty):
-                    return jsonify({"error": f"OpenBB history failed: {herr or 'no data'}"}), 502
-                # Handle both DataFrame and OBBject responses
-                if hasattr(df, 'iloc'):
-                    last = df.iloc[-1]; prev = df.iloc[-2] if len(df) > 1 else last
+                qt_df, qerr = _ob_call(lambda: _ob_equity_quote_df(obb, sym), timeout=15)
+                df, herr = _ob_call(lambda: _ob_equity_hist_df(obb, sym, '1d'), timeout=15)
+                if qerr or qt_df is None or herr or df is None or (hasattr(df, 'empty') and df.empty):
+                    print(f"[!] OpenBB full failed for {sym}: quote_err={qerr} history_err={herr}")
                 else:
-                    last = prev = {}
-                price = to_float_2(last.get('close') if isinstance(last, dict) else last.get('close'))
-                pre_c = to_float_2(prev.get('close') if isinstance(prev, dict) else prev.get('close'))
-                chg   = round(price - pre_c, 2) if price and pre_c else 0
-                pct   = round(chg / pre_c * 100, 2) if pre_c else 0
-                kline = []
-                for idx, row in df.tail(days).iterrows():
-                    kline.append({
-                        "date":   idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
-                        "open":   to_float_2(row.get('open')),
-                        "high":   to_float_2(row.get('high')),
-                        "low":    to_float_2(row.get('low')),
-                        "close":  to_float_2(row.get('close')),
-                        "volume": int(to_float(row.get('volume')) or 0),
-                    })
-                qt_name = stock_code
-                if hasattr(qt_df, 'iloc') and len(qt_df) > 0:
-                    qt_name = qt_df.iloc[0].get('name', stock_code)
-                elif hasattr(qt_df, '__data__'):
-                    qt_name = qt_df.__data__.get('name', stock_code)
-                quote = {
-                    "name":          qt_name,
-                    "code":          stock_code,
-                    "price":         price,
-                    "change":        chg,
-                    "changePercent": pct,
-                    "open":          to_float_2(last.get('open') if isinstance(last, dict) else last.get('open')),
-                    "high":          to_float_2(last.get('high') if isinstance(last, dict) else last.get('high')),
-                    "low":           to_float_2(last.get('low')  if isinstance(last, dict) else last.get('low')),
-                    "volume":        int(to_float(last.get('volume') if isinstance(last, dict) else last.get('volume')) or 0),
-                    "prev_close":    pre_c,
-                    "preClose":      pre_c,
-                    "last_price":    price,
-                    "change_percent": pct / 100 if pct else 0,
-                }
-                # 获取估值指标 (PE, EPS, MarketCap)
-                m_df, merr = _ob_call(
-                    lambda: obb.equity.fundamental.metrics(sym, provider='yfinance', limit=1).to_dataframe(),
-                    timeout=15)
-                if m_df is not None and hasattr(m_df, 'iloc') and len(m_df) > 0:
-                    mr = m_df.iloc[0]
-                    quote.update({
-                        "peRatio":      to_float_2(mr.get('pe_ratio')),
-                        "eps":          to_float_2(mr.get('eps_ttm')),
-                        "marketCap":    to_float_2(mr.get('market_cap')),
-                        "dividendYield": to_float_2(mr.get('dividend_yield')),
-                        "beta":         to_float_2(mr.get('beta')),
-                    })
-                if hasattr(qt_df, 'iloc') and len(qt_df) > 0:
-                    r = qt_df.iloc[0]
-                    quote.update({
-                        "bid":      to_float_2(r.get('bid')),
-                        "ask":      to_float_2(r.get('ask')),
-                        "yearHigh": to_float_2(r.get('year_high')),
-                        "yearLow":  to_float_2(r.get('year_low')),
-                        "provider":  "yfinance",
-                    })
-                return jsonify({"quote": quote, "kline": kline})
+                    # Handle both DataFrame and OBBject responses
+                    if hasattr(df, 'iloc'):
+                        last = df.iloc[-1]; prev = df.iloc[-2] if len(df) > 1 else last
+                    else:
+                        last = prev = {}
+                    price = to_float_2(last.get('close') if isinstance(last, dict) else last.get('close'))
+                    pre_c = to_float_2(prev.get('close') if isinstance(prev, dict) else prev.get('close'))
+                    chg   = round(price - pre_c, 2) if price and pre_c else 0
+                    pct   = round(chg / pre_c * 100, 2) if pre_c else 0
+                    kline = []
+                    for idx, row in df.tail(days).iterrows():
+                        kline.append({
+                            "date":   idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+                            "open":   to_float_2(row.get('open')),
+                            "high":   to_float_2(row.get('high')),
+                            "low":    to_float_2(row.get('low')),
+                            "close":  to_float_2(row.get('close')),
+                            "volume": int(to_float(row.get('volume')) or 0),
+                        })
+                    qt_name = stock_code
+                    if hasattr(qt_df, 'iloc') and len(qt_df) > 0:
+                        qt_name = qt_df.iloc[0].get('name', stock_code)
+                    elif hasattr(qt_df, '__data__'):
+                        qt_name = qt_df.__data__.get('name', stock_code)
+                    quote = {
+                        "name":          qt_name,
+                        "code":          stock_code,
+                        "price":         price,
+                        "change":        chg,
+                        "changePercent": pct,
+                        "open":          to_float_2(last.get('open') if isinstance(last, dict) else last.get('open')),
+                        "high":          to_float_2(last.get('high') if isinstance(last, dict) else last.get('high')),
+                        "low":           to_float_2(last.get('low')  if isinstance(last, dict) else last.get('low')),
+                        "volume":        int(to_float(last.get('volume') if isinstance(last, dict) else last.get('volume')) or 0),
+                        "prev_close":    pre_c,
+                        "preClose":      pre_c,
+                        "last_price":    price,
+                        "change_percent": pct / 100 if pct else 0,
+                    }
+                    # 获取估值指标 (PE, EPS, MarketCap)
+                    m_df, merr = _ob_call(
+                        lambda: obb.equity.fundamental.metrics(sym, provider='yfinance', limit=1).to_dataframe(),
+                        timeout=15)
+                    if m_df is not None and hasattr(m_df, 'iloc') and len(m_df) > 0:
+                        mr = m_df.iloc[0]
+                        quote.update({
+                            "peRatio":      to_float_2(mr.get('pe_ratio')),
+                            "eps":          to_float_2(mr.get('eps_ttm')),
+                            "marketCap":    to_float_2(mr.get('market_cap')),
+                            "dividendYield": to_float_2(mr.get('dividend_yield')),
+                            "beta":         to_float_2(mr.get('beta')),
+                        })
+                    if hasattr(qt_df, 'iloc') and len(qt_df) > 0:
+                        r = qt_df.iloc[0]
+                        quote.update({
+                            "bid":      to_float_2(r.get('bid')),
+                            "ask":      to_float_2(r.get('ask')),
+                            "yearHigh": to_float_2(r.get('year_high')),
+                            "yearLow":  to_float_2(r.get('year_low')),
+                            "provider":  "yfinance",
+                        })
+                    return jsonify({"quote": quote, "kline": kline})
             except Exception as e:
                 return jsonify({"error": f"OpenBB failed for {stock_code}: {e}"}), 502
+        quote, kline, err = _yf_quote_and_kline(stock_code, days=days)
+        if err or quote is None or kline is None:
+            return jsonify({"error": f"获取数据失败：{err or 'no data'}"}), 502
+        return jsonify({"quote": quote, "kline": kline})
 
     # ---- Crypto via OpenBB Package ----
-    market = (request.args.get("market") or "").strip().lower()
     if market == "crypto":
         obb = _get_obb()
         if obb:
@@ -996,7 +1230,9 @@ def generate_financial_news():
         for sym in symbols:
             try:
                 stock = yf.Ticker(sym)
-                news  = stock.news or []
+                news, nerr = _ob_call(lambda: stock.news or [], timeout=4)
+                if nerr or not news:
+                    continue
                 for item in news[:3]:
                     title = item.get("title", "")
                     if not title:
