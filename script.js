@@ -957,7 +957,7 @@ async function analyzeStock() {
         let stockData, quote;
         
         // 1) 行情快照（报价）
-        const quoteRes = await apiFetch(`/api/stock/full?code=${stockCode}`);
+        const quoteRes = await apiFetch(`/api/stock/full?code=${stockCode}&market=${stockType}`);
         if (!quoteRes.ok) {
             let errMsg = `请求失败(${quoteRes.status})`;
             try { const e = await quoteRes.json(); if (e && e.error) errMsg = e.error; } catch (_) {}
@@ -968,7 +968,7 @@ async function analyzeStock() {
         quote = quoteData.quote;
         
         // 2) K线历史数据
-        const klineRes = await apiFetch(`/api/stock/kline?code=${stockCode}&interval=${currentKlinePeriod}`);
+        const klineRes = await apiFetch(`/api/stock/kline?code=${stockCode}&interval=${currentKlinePeriod}&market=${stockType}`);
         if (!klineRes.ok) {
             let errMsg = `K线请求失败(${klineRes.status})`;
             try { const e = await klineRes.json(); if (e && e.error) errMsg = e.error; } catch (_) {}
@@ -1431,6 +1431,54 @@ function displayEnhancedSupportResistance(srData) {
         srHtml += '</ul></div>';
     }
     
+    // ---- OpenBB 技术分析：Fibonacci / ATR / Donchian ----
+    if (srData.openbb) {
+        const obb = srData.openbb;
+        const price = srData.currentPrice || 0;
+        
+        // Fibonacci
+        if (obb.fib && obb.fib.length > 0) {
+            srHtml += '<div style="margin-top: 20px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">';
+            srHtml += '<div style="color: #ffd93d; font-weight: 600; margin-bottom: 10px; font-size: 0.9rem;">🎯 Fibonacci 回撤位</div>';
+            srHtml += '<div style="display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; font-size: 0.85rem;">';
+            srHtml += '<span style="color: #8892b0;">位置</span><span style="color: #8892b0;">价格</span><span style="color: #8892b0;">类型</span>';
+            obb.fib.forEach(f => {
+                const distStr = f.distance ? (f.distance > 0 ? '+' + f.distance.toFixed(1) + '%' : f.distance.toFixed(1) + '%') : '';
+                const typeColor = f.type === 'resistance' ? '#ff4757' : '#00ff88';
+                const typeText  = f.type === 'resistance' ? '压力' : '支撑';
+                srHtml += `<span style="color: #ffd93d;">${f.level}%</span>`;
+                srHtml += `<span style="color: #e0e0e0;">$${f.price.toFixed(2)} <span style="color: #64b5f6; font-size:0.8rem;">${distStr}</span></span>`;
+                srHtml += `<span style="color: ${typeColor}; font-weight:600;">${typeText}</span>`;
+            });
+            srHtml += '</div></div>';
+        }
+        
+        // ATR 动态支撑/压力
+        if (obb.atr && obb.atr.atr) {
+            const atr = obb.atr;
+            srHtml += '<div style="margin-top: 12px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">';
+            srHtml += `<div style="color: #ffd93d; font-weight: 600; margin-bottom: 10px; font-size: 0.9rem;">📊 ATR 动态区间 <span style="font-size: 0.8rem; color: #64b5f6;">(ATR=${atr.atr})</span></div>`;
+            srHtml += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: 0.85rem;">';
+            srHtml += `<div><span style="color: #ff4757;">压力2</span> <span style="color:#e0e0e0;">$${atr.resistance2}</span></div>`;
+            srHtml += `<div><span style="color: #ff4757;">压力1</span> <span style="color:#e0e0e0;">$${atr.resistance1}</span></div>`;
+            srHtml += `<div><span style="color: #00ff88;">支撑1</span> <span style="color:#e0e0e0;">$${atr.support1}</span></div>`;
+            srHtml += `<div><span style="color: #00ff88;">支撑2</span> <span style="color:#e0e0e0;">$${atr.support2}</span></div>`;
+            srHtml += '</div></div>';
+        }
+        
+        // Donchian Channel
+        if (obb.donchian && obb.donchian.upper) {
+            const dc = obb.donchian;
+            srHtml += '<div style="margin-top: 12px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">';
+            srHtml += '<div style="color: #ffd93d; font-weight: 600; margin-bottom: 10px; font-size: 0.9rem;">🔷 Donchian 通道</div>';
+            srHtml += '<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; font-size: 0.85rem; text-align: center;">';
+            srHtml += `<div><div style="color: #ff4757;">上轨(压力)</div><div style="color:#e0e0e0;">$${dc.upper ? dc.upper.toFixed(2) : '--'}</div></div>`;
+            srHtml += `<div><div style="color: #ffd93d;">中轨</div><div style="color:#e0e0e0;">$${dc.middle ? dc.middle.toFixed(2) : '--'}</div></div>`;
+            srHtml += `<div><div style="color: #00ff88;">下轨(支撑)</div><div style="color:#e0e0e0;">$${dc.lower ? dc.lower.toFixed(2) : '--'}</div></div>`;
+            srHtml += '</div></div>';
+        }
+    }
+    
     document.getElementById('supportResistance').innerHTML = srHtml;
 }
 
@@ -1573,10 +1621,15 @@ async function addPosition() {
         return;
     }
     
+    // Auto-detect market from code pattern
+    let market = 'us';
+    if (/^\d{6}$/.test(code)) market = 'cn';
+    else if (/^(BTC|ETH|SOL|XRP|ADA|DOT|AVAX|MATIC|LINK|UNI|USDT)$/i.test(code)) market = 'crypto';
+    
     let stockName = getStockName(code);
     
     try {
-        const response = await fetch(`/api/stock/quote?code=${code}`);
+        const response = await fetch(`/api/stock/quote?code=${code}&market=${market}`);
         const data = await response.json();
         if (data.name) {
             stockName = data.name;
@@ -1621,7 +1674,8 @@ async function addPosition() {
 async function updatePositionPrices() {
     for (let position of holdings) {
         try {
-            const response = await fetch(`/api/stock/quote?code=${position.code}`);
+            const pm = position.market || (/^\d{6}$/.test(position.code) ? 'cn' : 'us');
+            const response = await fetch(`/api/stock/quote?code=${position.code}&market=${pm}`);
             const data = await response.json();
             if (data.price) {
                 position.currentPrice = data.price;
