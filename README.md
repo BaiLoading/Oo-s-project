@@ -1,29 +1,8 @@
-# 股债智能分析系统
+# 📈 股债分析系统
 
-股债数据分析平台，支持 A股、美股、加密货币的技术分析、财报、新闻、AI 对话。
+> A股 / 美股 / 加密货币行情 + 技术分析 + AI 对话
 
----
-
-## 快速开始
-
-### Windows 一键安装（首次运行）
-
-双击运行：
-
-```
-install_windows.bat
-```
-
-按提示操作即可。安装完成后双击 `START.bat` 启动后端。
-
-### macOS / Linux 安装
-
-```bash
-chmod +x install.sh
-./install.sh
-```
-
-启动后端：`./start.sh`
+**无需数据库，直接运行！**
 
 ---
 
@@ -32,198 +11,208 @@ chmod +x install.sh
 | 项目 | 要求 |
 |------|------|
 | Python | 3.10 或 3.11（推荐 3.11） |
-| 内存 | 建议 8GB+（OpenBB 较耗内存） |
-| 网络 | 需要访问 akshare、Yahoo Finance、通义千问 API |
+| 内存 | 4GB+（推荐 8GB+，openbb 较耗内存） |
+| 网络 | 需要访问互联网获取行情数据 |
 
 ---
 
-## 安装详解
+## 🪟 Windows 安装
 
-### 第一步：安装 Python 依赖
+### 方式一：双击安装（推荐）
 
-#### Windows
+1. 双击 `install_windows.bat`，等待 3-8 分钟
+2. 双击 `START.bat` 启动后端
+3. 用浏览器打开 `index.html`
 
-运行 `install_windows.bat`，脚本会自动：
-
-1. 检测 Python 版本（需 3.10+）
-2. 创建虚拟环境 `.venv`
-3. 安装所有 Python 依赖
-4. 验证安装是否成功
-
-#### macOS / Linux
+### 方式二：检查环境
 
 ```bash
-# 创建虚拟环境
-python3 -m venv .venv
-
-# 激活虚拟环境
-source .venv/bin/activate   # macOS/Linux
-
-# 安装依赖
-pip install --upgrade pip
-pip install flask==3.0.3
-pip install flask-cors==4.0.1
-pip install requests==2.32.3
-pip install pandas==2.2.3
-pip install akshare==1.14.20
-pip install yfinance==0.2.41
-pip install dashscope==1.20.0
-pip install openbb
-pip install qrcode[pil]==8.0
-pip install pillow==11.2.0
-pip install gunicorn==23.0.0
+# 检测依赖是否齐全
+CHECK.bat
 ```
 
-### 第二步：配置（可选）
+---
 
-如果需要 AI 对话功能，在项目根目录创建 `.env` 文件：
-
-```
-# .env 文件（从 config.example.py 复制修改）
-DASHSCOPE_API_KEY=your-dashscope-api-key-here
-DASHSCOPE_MODEL=qwen-turbo
-```
-
-获取通义千问 API Key：https://dashscope.console.aliyun.com/apiKey
-
-不配置 `.env` 也能运行，只是 AI 对话功能不可用。
-
-### 第三步：启动后端
-
-#### Windows
-
-双击 `START.bat`
-
-#### macOS / Linux
+## 🍎 macOS / Linux 安装
 
 ```bash
-source .venv/bin/activate
-python server.py
+# 1. 下载代码后，进入项目目录
+cd Oo-s-project
+
+# 2. 添加执行权限（仅首次需要）
+chmod +x install.sh start.sh CHECK.sh
+
+# 3. 一键安装
+./install.sh
+
+# 4. 启动后端
+./start.sh
+
+# 5. 用浏览器打开 index.html
 ```
 
-后端启动后访问：**http://localhost:3000**
+---
 
-### 第四步：打开前端
+## 配置 AI 对话（可选）
 
-**方式 A（推荐）：VS Code Live Server**
+AI 对话功能需要通义千问 API Key。
 
-1. VS Code 安装 "Live Server" 插件
-2. 右键 `index.html` → "Open with Live Server"
-3. 自动打开浏览器
+### 获取 API Key
 
-**方式 B：直接双击 index.html**
+1. 打开 https://dashscope.console.aliyun.com/apiKey
+2. 创建 API Key
+3. 打开 `.env` 文件，填入：
 
-直接双击 `index.html` 文件用浏览器打开（文件协议，无跨域问题）
+```
+DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
+```
+
+> 无 API Key 也能正常使用行情功能，AI 对话不可用
+
+---
+
+## 启动前端
+
+### Windows
+
+- **方式 A**：直接双击 `index.html`（最简单）
+- **方式 B**：VS Code 安装 Live Server 插件，右键 `index.html` → Open with Live Server
+
+### macOS / Linux
+
+- **方式 A**：直接双击 `index.html`
+- **方式 B**：`python3 -m http.server 8080` 然后浏览器打开 http://localhost:8080
+
+---
+
+## 接口文档
+
+后端运行在 `http://localhost:3000`
+
+| 接口 | 方法 | 参数 | 说明 |
+|------|------|------|------|
+| `/api/stock/quote` | GET | code, market | 实时报价 |
+| `/api/stock/kline` | GET | code, days, interval, market | K线数据 |
+| `/api/stock/full` | GET | code, market | 完整行情 |
+| `/api/stock/financial/income` | GET | code | 利润表 |
+| `/api/stock/financial/balance` | GET | code | 资产负债表 |
+| `/api/stock/financial/cash` | GET | code | 现金流量表 |
+| `/api/stock/metrics` | GET | code | 估值指标 |
+| `/api/stock/management` | GET | code | 管理层信息 |
+| `/api/stock/ranking` | GET | - | 热门榜单 |
+| `/api/stock/picker` | GET | - | 智能选股 |
+| `/api/stock/related-news` | GET | code | 个股新闻 |
+| `/api/news` | GET | - | 财经新闻 |
+| `/api/ai/analysis` | GET | code | AI 技术分析 |
+| `/api/ai/chat` | POST | message | AI 对话 |
+| `/api/technical/dashboard` | GET | code | 技术指标仪表盘 |
+| `/api/strategy` | GET/POST | - | 策略管理 |
+
+### market 参数说明
+
+| 值 | 市场 | 示例 |
+|----|------|------|
+| `cn` | A股 | 600519（茅台） |
+| `us` | 美股 | AAPL、TSLA |
+| `hk` | 港股 | 0700（腾讯） |
+| `crypto` | 加密货币 | BTC、ETH |
+
+---
+
+## 常见问题
+
+### Q: install.bat 失败怎么办？
+
+1. 检查网络是否正常
+2. 以管理员身份运行
+3. 检查 Python 是否在 PATH 中：运行 `python --version`
+
+### Q: 提示 "Too Many Requests"（美股数据）
+
+正常，Yahoo Finance 有请求限制。内置了重试机制，稍等片刻再试。
+
+### Q: A股数据获取失败
+
+1. 检查是否安装了 akshare：`CHECK.bat`
+2. akshare 需要网络能访问国内金融网站
+
+### Q: AI 对话返回错误
+
+1. 检查 `.env` 是否配置了 `DASHSCOPE_API_KEY`
+2. 检查 API Key 是否有效
+
+### Q: 想修改后端端口
+
+编辑 `server.py`，找到 `app.run(port=3000)` 改成其他端口。
+
+---
+
+## 公网部署
+
+### 方案 A：ngrok（最简单）
+
+```bash
+# 安装 ngrok
+ngrok http 3000
+
+# 将生成的公网地址填入前端
+```
+
+### 方案 B：云服务器
+
+1. 在云服务器上运行 `install.sh`
+2. 运行 `start.sh`
+3. 配置 nginx 反向代理到 3000 端口
+4. 域名解析到服务器 IP
+
+### 方案 C：Docker
+
+```bash
+docker build -t stock-server .
+docker run -d -p 3000:3000 stock-server
+```
+
+---
+
+## 数据来源
+
+| 市场 | 数据源 |
+|------|--------|
+| A股 | akshare（东方财富、同花顺等） |
+| 美股 | Yahoo Finance（via openbb / yfinance） |
+| 港股 | akshare |
+| 加密货币 | Yahoo Finance（via openbb） |
 
 ---
 
 ## 项目结构
 
 ```
-D:\代码仓库\Oo-s-project\
-├── index.html          前端页面（无需构建，直接浏览器打开）
-├── script.js          前端逻辑
-├── style.css          前端样式
-├── server.py          Flask 后端（所有 API 接口）
-├── config.example.py  配置文件模板
-├── requirements.txt   Python 依赖列表
-│
-├── install_windows.bat Windows 一键安装脚本
-├── install.sh          macOS/Linux 安装脚本
-├── START.bat          Windows 快速启动后端
-├── start.sh           macOS/Linux 启动后端
-│
-├── .venv              Python 虚拟环境（安装后自动生成）
-├── .env               你的配置文件（创建 .env 后才有）
-└── user_memory.json   AI 对话记忆（运行时自动生成）
+Oo-s-project/
+├── server.py          # 后端入口（Flask）
+├── index.html         # 前端主页
+├── script.js          # 前端逻辑
+├── style.css          # 样式
+├── .env               # 配置文件（勿提交）
+├── .env.example       # 配置模板
+├── requirements.txt   # Python 依赖
+├── START.bat          # Windows 启动脚本
+├── START.sh           # macOS/Linux 启动脚本
+├── install_windows.bat  # Windows 安装脚本
+├── install.sh         # macOS/Linux 安装脚本
+├── CHECK.bat          # Windows 环境检测
+├── CHECK.sh           # macOS/Linux 环境检测
+└── README.md          # 本文件
 ```
 
 ---
 
-## 接口文档
+## 一键安装命令（手动）
 
-### 主要接口
-
-| 接口 | 说明 |
-|------|------|
-| `GET /api/stock/full?code=600519&market=cn` | A股完整行情 |
-| `GET /api/stock/full?code=MU&market=us` | 美股完整行情 |
-| `GET /api/stock/quote?code=600519` | 实时报价 |
-| `GET /api/stock/kline?code=600519&days=120` | 历史K线 |
-| `GET /api/news` | 财经新闻 |
-| `GET /api/stock/ranking` | 热门股票榜单 |
-| `GET /api/stock/related-news?code=600519` | 个股新闻 |
-| `POST /api/enhanced/analysis` | AI 技术分析 |
-| `POST /api/ai/chat` | AI 聊天 |
-| `GET /api/technical/dashboard?code=MU` | 技术指标仪表盘 |
-| `GET /api/stock/financial/income?code=MU` | 利润表 |
-| `GET /api/stock/financial/balance?code=MU` | 资产负债表 |
-| `GET /api/stock/financial/cash?code=MU` | 现金流量表 |
-| `GET /api/stock/metrics?code=MU` | 估值指标 |
-| `GET /api/stock/management?code=MU` | 管理层信息 |
-| `POST /api/ai/tradingagents/report` | TradingAgents 研报 |
-| `GET /api/strategy` | 投资策略 |
-
----
-
-## 技术栈
-
-| 组件 | 技术 |
-|------|------|
-| 后端 | Flask 3.0 + Python |
-| 数据源 A股 | akshare（东方财富等） |
-| 数据源 美股 | Yahoo Finance（via OpenBB） |
-| AI 对话 | 通义千问（阿里云） |
-| 前端 | 原生 HTML/CSS/JS（无需构建） |
-| 图表 | Chart.js |
-
----
-
-## 常见问题
-
-### Q: 启动报错 "No module named 'flask'"
-A: 虚拟环境未激活。运行 `.venv\Scripts\activate`（Windows）或 `source .venv/bin/activate`（macOS/Linux）
-
-### Q: 启动报错 "Too Many Requests"（429）
-A: Yahoo Finance 请求频率限制，系统已内置重试机制，等几秒再试即可
-
-### Q: AI 对话功能不可用
-A: 需要配置 `.env` 文件填入 `DASHSCOPE_API_KEY`
-
-### Q: A股数据获取失败
-A: akshare 数据源有时不稳定，稍后重试即可
-
-### Q: 想在另一台设备访问？
-A: 后端支持局域网访问，地址为 `http://你的电脑IP:3000`，在同一局域网内的手机/电脑可直接访问
-
----
-
-## 部署到云端（可选）
-
-如需公网访问，有以下方案：
-
-### 方案 A：ngrok 内网穿透（免费/简单）
 ```bash
-ngrok http 3000
-# 然后用 ngrok 提供的公网地址访问
+# Windows PowerShell
+irm https://raw.githubusercontent.com/xxx/install.ps1 | iex
+
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/xxx/install.sh | bash
 ```
-
-### 方案 B：部署到服务器
-```bash
-pip install gunicorn
-gunicorn -w 2 -b 0.0.0.0:3000 server:app
-```
-
-### 方案 C：Docker 部署
-```bash
-docker build -t stock-server .
-docker run -p 3000:3000 stock-server
-```
-
----
-
-## 版本信息
-
-- server.py 最后更新：2026-04-05
-- OpenBB 版本：4.7.1
-- Python：3.11
