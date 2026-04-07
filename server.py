@@ -18,7 +18,7 @@ if sys.platform == 'win32':
 
 from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
-import random, re, json, os, time, hashlib, subprocess
+import random, re, json, os, time, hashlib, subprocess, tempfile
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -2708,6 +2708,564 @@ def clear_memory():
     return jsonify({"success": True})
 
 
+_STRATEGY_LIBRARY_READY = False
+
+def _ensure_strategy_library():
+    global _STRATEGY_LIBRARY_READY
+    if _STRATEGY_LIBRARY_READY:
+        return
+    try:
+        from strategy_builtin import builtin_strategies
+        from strategy_store import upsert_builtin
+        upsert_builtin(builtin_strategies())
+    except Exception as e:
+        print(f"[!] strategy library init failed: {e}")
+    _STRATEGY_LIBRARY_READY = True
+
+
+def _infer_factors_from_code(code_text):
+    s = (code_text or "").lower()
+    rules = [
+        ("ema", "EMA"),
+        ("ewm", "EMA"),
+        ("sma", "SMA"),
+        ("rolling", "SMA"),
+        ("macd", "MACD"),
+        ("adx", "ADX"),
+        ("atr", "ATR"),
+        ("boll", "布林带"),
+        ("upper", "布林带"),
+        ("lower", "布林带"),
+        ("rsi", "RSI"),
+        ("kdj", "KDJ"),
+        ("donchian", "Donchian"),
+        ("volume", "成交量"),
+        ("vwap", "VWAP"),
+        ("news", "新闻"),
+        ("pe", "PE"),
+        ("roe", "ROE"),
+        ("pb", "PB"),
+    ]
+    seen = []
+    for token, name in rules:
+        if token in s and name not in seen:
+            seen.append(name)
+    return seen[:12]
+
+def _infer_signal_reason_from_code(code_text, action):
+    s = (code_text or "").lower()
+    a = (action or "").lower()
+    if ("ema" in s or "ewm" in s) and ("span" in s):
+        return "EMA上穿" if a == "buy" else "EMA下穿"
+    if ("sma" in s or "rolling" in s) and ("mean" in s):
+        return "均线上穿" if a == "buy" else "均线下穿"
+    if "boll" in s or ("upper" in s and "lower" in s and "std" in s):
+        return "突破上轨" if a == "buy" else "跌破下轨"
+    if "macd" in s and ("sig" in s or "signal" in s):
+        return "MACD上穿信号线" if a == "buy" else "MACD跌破信号线"
+    if "adx" in s and ("plus_di" in s or "minus_di" in s):
+        return "ADX趋势成立" if a == "buy" else "ADX趋势失效"
+    if "donchian" in s or ("high_band" in s and "low_band" in s):
+        return "突破通道" if a == "buy" else "跌破通道"
+    if "rsi" in s:
+        return "RSI超卖" if a == "buy" else "RSI超买/退出"
+    return "信号变更"
+
+def _fetch_ohlcv_openbb_yf(symbol, start_date, end_date):
+    import pandas as pd
+
+    raw = (symbol or "").strip().upper()
+
+    def _normalize_yf_symbol(sym):
+        s = (sym or "").strip().upper()
+        if s.isdigit() and len(s) == 6:
+            return f"{s}.SS" if s.startswith("6") else f"{s}.SZ"
+        return s
+
+    candidates = []
+    c1 = _normalize_yf_symbol(raw)
+    if c1:
+        candidates.append(c1)
+    if raw and raw not in candidates:
+        candidates.append(raw)
+
+    last_err = None
+
+    try:
+        from openbb import obb
+        for c in candidates:
+            sym = format_symbol(c)
+            df = None
+            err = None
+            try:
+                df, err = _ob_call(
+                    lambda: obb.equity.price.historical(
+                        sym,
+                        start_date=start_date,
+                        end_date=end_date,
+                        interval="1d",
+                        provider="yfinance",
+                    ).to_dataframe(),
+                    timeout=30,
+                )
+            except TypeError:
+                df, err = _ob_call(lambda: obb.equity.price.historical(sym, interval="1d", provider="yfinance").to_dataframe(), timeout=30)
+
+            if err or df is None or (hasattr(df, "empty") and df.empty):
+                last_err = err or "empty data"
+                continue
+
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                df = df.dropna(subset=["date"]).set_index("date")
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index, errors="coerce")
+            df = df.dropna().sort_index()
+            if start_date:
+                df = df[df.index >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df.index <= pd.to_datetime(end_date)]
+
+            need = ["open", "high", "low", "close", "volume"]
+            for col in need:
+                if col not in df.columns:
+                    raise RuntimeError(f"missing column: {col}")
+            return df[need].copy()
+    except Exception as e:
+        last_err = str(e)
+
+    try:
+        import yfinance as yf
+        for c in candidates:
+            df = yf.download(
+                c,
+                start=start_date or None,
+                end=end_date or None,
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            if df is None or df.empty:
+                last_err = "yfinance empty data"
+                continue
+            df = df.rename(columns={k: k.lower() for k in df.columns})
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index, errors="coerce")
+            df = df.dropna().sort_index()
+            need = ["open", "high", "low", "close", "volume"]
+            for col in need:
+                if col not in df.columns:
+                    raise RuntimeError(f"missing column: {col}")
+            return df[need].copy()
+    except Exception as e:
+        last_err = str(e)
+
+    raise RuntimeError(last_err or "empty data")
+
+
+def _run_backtest_sandbox(strategy_code, df, params):
+    df2 = df.copy()
+    df2 = df2.reset_index().rename(columns={df2.index.name or "index": "date"})
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as f:
+        data_path = f.name
+        df2.to_csv(f, index=False)
+
+    payload = {"code": strategy_code, "params": params or {}, "data_path": data_path}
+    runner = os.path.join(os.path.dirname(__file__), "strategy_sandbox_runner.py")
+    try:
+        proc = subprocess.run(
+            [sys.executable, runner],
+            input=json.dumps(payload, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            cwd=os.path.dirname(__file__),
+        )
+        out = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            return None, (proc.stderr or out or "sandbox failed")
+        resp = json.loads(out) if out else {}
+        if not resp.get("ok"):
+            return None, resp.get("error") or "sandbox error"
+        return resp, None
+    finally:
+        try:
+            os.remove(data_path)
+        except Exception:
+            pass
+
+
+def _metrics_from_equity_series(dates, equity):
+    import numpy as np
+    import pandas as pd
+    eq = np.array(equity, dtype=float)
+    if len(eq) < 2:
+        return {
+            "final_capital": float(eq[-1]) if len(eq) else 0.0,
+            "total_return": 0.0,
+            "annualized_return": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+        }
+    peak = np.maximum.accumulate(eq)
+    dd = (eq / peak) - 1.0
+    max_dd = float(dd.min()) if len(dd) else 0.0
+    total_return = float(eq[-1] / eq[0] - 1.0)
+    ann = float((eq[-1] / eq[0]) ** (252.0 / max(1, len(eq) - 1)) - 1.0)
+    ret = pd.Series(eq, index=dates).pct_change().fillna(0.0).values
+    mean = float(np.mean(ret[1:])) if len(eq) > 2 else 0.0
+    std = float(np.std(ret[1:], ddof=1)) if len(eq) > 3 else 0.0
+    sharpe = float((mean / std) * np.sqrt(252.0)) if std > 1e-12 else 0.0
+    return {
+        "final_capital": float(eq[-1]),
+        "total_return": round(total_return, 6),
+        "annualized_return": round(ann, 6),
+        "max_drawdown": round(max_dd, 6),
+        "sharpe": round(sharpe, 6),
+    }
+
+
+def _backtest_engine(df, positions, initial_cash, strategy_code="", symbol=""):
+    import numpy as np
+    import pandas as pd
+
+    opens = df["open"].astype(float).values
+    closes = df["close"].astype(float).values
+    dates = df.index
+
+    sig = np.array(positions, dtype=float)
+    if len(sig) != len(df):
+        raise RuntimeError("positions length mismatch")
+    sig = np.clip(sig, 0.0, 1.0)
+
+    cash = float(initial_cash)
+    shares = 0.0
+    in_pos = False
+    entry_price = None
+    entry_time = None
+    entry_shares = None
+
+    equity = [cash]
+    trades = []
+
+    for i in range(1, len(df)):
+        desired = 1.0 if sig[i - 1] > 0.5 else 0.0
+        dt = dates[i]
+        buy_time = str(dt.date()) if hasattr(dt, "date") else str(dt)
+
+        if not in_pos and desired > 0.5:
+            px = float(opens[i])
+            if px > 0 and cash > 0:
+                shares = cash / px
+                entry_shares = shares
+                cash = 0.0
+                in_pos = True
+                entry_price = px
+                entry_time = buy_time
+        elif in_pos and desired <= 0.5:
+            px = float(opens[i])
+            cash = shares * px
+            shares = 0.0
+            in_pos = False
+            sell_time = buy_time
+            if entry_price and entry_shares:
+                pnl = cash - (entry_shares * entry_price)
+                pnl_ratio = (px / entry_price - 1.0) if entry_price else 0.0
+                reason = _infer_signal_reason_from_code(strategy_code, "buy") + " → " + _infer_signal_reason_from_code(strategy_code, "sell")
+                trades.append({
+                    "symbol": symbol,
+                    "buy_time": entry_time,
+                    "buy_price": float(entry_price),
+                    "sell_time": sell_time,
+                    "sell_price": float(px),
+                    "position_size": float(entry_shares),
+                    "pnl": round(float(pnl), 6),
+                    "pnl_ratio": round(float(pnl_ratio), 6),
+                    "signal_reason": reason,
+                })
+            entry_price = None
+            entry_time = None
+            entry_shares = None
+
+        eq = cash + shares * float(closes[i])
+        equity.append(float(eq))
+
+    if in_pos and entry_price and entry_shares:
+        dt = dates[-1]
+        sell_time = str(dt.date()) if hasattr(dt, "date") else str(dt)
+        px = float(closes[-1])
+        cash = shares * px
+        shares = 0.0
+        pnl = cash - (entry_shares * entry_price)
+        pnl_ratio = (px / entry_price - 1.0) if entry_price else 0.0
+        reason = _infer_signal_reason_from_code(strategy_code, "buy") + " → " + "收盘平仓"
+        trades.append({
+            "symbol": symbol,
+            "buy_time": entry_time,
+            "buy_price": float(entry_price),
+            "sell_time": sell_time,
+            "sell_price": float(px),
+            "position_size": float(entry_shares),
+            "pnl": round(float(pnl), 6),
+            "pnl_ratio": round(float(pnl_ratio), 6),
+            "signal_reason": reason,
+        })
+
+    wins = sum(1 for t in trades if t.get("pnl", 0) > 0)
+    win_rate = float(wins / len(trades)) if trades else 0.0
+
+    curve = [{"date": str(d.date()) if hasattr(d, "date") else str(d), "equity": float(v)} for d, v in zip(dates, equity)]
+    met = _metrics_from_equity_series(dates, equity)
+    return {
+        "metrics": {
+            **met,
+            "win_rate": round(win_rate, 6),
+            "trades": len(trades),
+            "bars": int(len(df)),
+        },
+        "equity_curve": curve,
+        "trades_list": trades,
+        "positions": [float(x) for x in sig.tolist()],
+    }
+
+
+@app.route("/api/strategy-library", methods=["GET"])
+def strategy_library_list():
+    try:
+        _ensure_strategy_library()
+        from strategy_store import list_strategies
+        q = (request.args.get("q") or "").strip()
+        tag = (request.args.get("tag") or "").strip()
+        type_name = (request.args.get("type") or "").strip()
+        builtin_raw = (request.args.get("builtin") or "").strip().lower()
+        builtin = None
+        if builtin_raw in ["1", "true", "yes", "on"]:
+            builtin = True
+        if builtin_raw in ["0", "false", "no", "off"]:
+            builtin = False
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("pageSize", 20))
+        data = list_strategies(query=q, tag=tag, type_name=type_name, builtin=builtin, page=page, page_size=page_size)
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"策略库加载失败: {e}"}), 500
+
+
+@app.route("/api/strategy-library/<int:sid>", methods=["GET"])
+def strategy_library_detail(sid):
+    _ensure_strategy_library()
+    from strategy_store import get_strategy, list_backtests
+    s = get_strategy(sid)
+    if not s:
+        return jsonify({"error": "策略不存在"}), 404
+    s["factors"] = _infer_factors_from_code(s.get("code"))
+    s["recent_backtests"] = list_backtests(sid, limit=10)
+    return jsonify({"success": True, "data": s})
+
+
+@app.route("/api/strategy-library", methods=["POST"])
+def strategy_library_create():
+    _ensure_strategy_library()
+    from strategy_store import create_strategy
+    d = request.json or {}
+    name = (d.get("name") or "").strip()
+    description = (d.get("description") or "").strip()
+    code = (d.get("code") or "").strip()
+    params = d.get("params") or {}
+    tags = d.get("tags") or []
+    type_name = (d.get("type") or "").strip()
+    if not name or not description or not code:
+        return jsonify({"error": "name/description/code 必填"}), 400
+    sid = create_strategy(name, description, code, params, tags, type_name)
+    return jsonify({"success": True, "data": {"id": sid}})
+
+
+@app.route("/api/strategy-library/<int:sid>", methods=["PUT"])
+def strategy_library_update(sid):
+    _ensure_strategy_library()
+    from strategy_store import update_strategy
+    d = request.json or {}
+    name = (d.get("name") or "").strip()
+    description = (d.get("description") or "").strip()
+    code = (d.get("code") or "").strip()
+    params = d.get("params") or {}
+    tags = d.get("tags") or []
+    type_name = (d.get("type") or "").strip()
+    ok = update_strategy(sid, name, description, code, params, tags, type_name)
+    if not ok:
+        return jsonify({"error": "不可修改（可能是内置策略）或不存在"}), 400
+    return jsonify({"success": True})
+
+
+@app.route("/api/strategy-library/<int:sid>", methods=["DELETE"])
+def strategy_library_delete(sid):
+    _ensure_strategy_library()
+    from strategy_store import delete_strategy
+    ok = delete_strategy(sid)
+    if not ok:
+        return jsonify({"error": "不可删除（可能是内置策略）或不存在"}), 400
+    return jsonify({"success": True})
+
+
+@app.route("/api/strategy-library/<int:sid>/backtests", methods=["GET"])
+def strategy_library_backtests(sid):
+    _ensure_strategy_library()
+    from strategy_store import list_backtests
+    items = list_backtests(sid, limit=30)
+    return jsonify({"success": True, "data": items})
+
+
+@app.route("/api/strategy-library/<int:sid>/backtest", methods=["POST"])
+def strategy_library_backtest_run(sid):
+    _ensure_strategy_library()
+    from strategy_store import get_strategy, create_backtest_run, finish_backtest_run, replace_trades
+    s = get_strategy(sid)
+    if not s:
+        return jsonify({"error": "策略不存在"}), 404
+    d = request.json or {}
+    symbols = d.get("symbols")
+    if not symbols:
+        raw = (d.get("symbol") or "").strip()
+        symbols = [x.strip().upper() for x in raw.replace("；", ",").replace("，", ",").split(",") if x.strip()]
+    else:
+        symbols = [str(x).strip().upper() for x in (symbols or []) if str(x).strip()]
+    start_date = (d.get("start_date") or "").strip()
+    end_date = (d.get("end_date") or "").strip()
+    initial_cash = float(d.get("initial_cash") or 100000)
+    params = s.get("params") or {}
+    override = d.get("params") or {}
+    if isinstance(override, dict):
+        params = {**params, **override}
+    if not symbols:
+        return jsonify({"error": "请提供股票代码"}), 400
+
+    backtest_id = create_backtest_run(sid, s.get("name") or "", symbols, start_date, end_date, initial_cash, params)
+    t0 = time.time()
+    code = s.get("code") or ""
+    per_cash = initial_cash / max(1, len(symbols))
+    by_symbol = {}
+    all_trades = []
+    equity_series = []
+    try:
+        import pandas as pd
+        for sym in symbols:
+            df = _fetch_ohlcv_openbb_yf(sym, start_date, end_date)
+            if len(df) < 30:
+                raise RuntimeError(f"{sym} K线数据不足（至少 30 根）")
+            sandbox_out, err = _run_backtest_sandbox(code, df, params)
+            if err:
+                raise RuntimeError(f"{sym} 策略执行失败: {err}")
+            res = _backtest_engine(df, sandbox_out.get("positions") or [], per_cash, strategy_code=code, symbol=sym)
+            by_symbol[sym] = res
+            all_trades.extend(res.get("trades_list") or [])
+            ser = pd.Series([p["equity"] for p in res.get("equity_curve") or []], index=[p["date"] for p in res.get("equity_curve") or []])
+            ser.name = sym
+            equity_series.append(ser)
+
+        if not equity_series:
+            raise RuntimeError("无有效数据")
+        eq_df = pd.concat(equity_series, axis=1, join="inner")
+        try:
+            eq_df = eq_df.ffill()
+        except Exception:
+            pass
+        eq_df = eq_df.fillna(per_cash)
+        combined = eq_df.sum(axis=1)
+        dates = pd.to_datetime(combined.index, errors="coerce")
+        curve = [{"date": str(d.date()), "equity": float(v)} for d, v in zip(dates, combined.values)]
+        met = _metrics_from_equity_series(dates, combined.values)
+        wins = sum(1 for t in all_trades if t.get("pnl", 0) > 0)
+        win_rate = float(wins / len(all_trades)) if all_trades else 0.0
+        met["win_rate"] = round(win_rate, 6)
+        met["trades"] = len(all_trades)
+        met["final_capital"] = float(combined.values[-1]) if len(combined.values) else initial_cash
+        if len(all_trades) == 0 and abs(float(met.get("total_return") or 0)) > 1e-9:
+            raise RuntimeError("数据一致性校验失败：收益非0但无交易明细")
+
+        result = {
+            "equity_curve": curve,
+            "trades_list": all_trades,
+            "by_symbol": by_symbol,
+            "symbols": symbols,
+        }
+        runtime = time.time() - t0
+        met["runtime_seconds"] = round(runtime, 3)
+        finish_backtest_run(backtest_id, "done", metrics=met, result=result, error="", runtime_seconds=runtime)
+        replace_trades(backtest_id, all_trades)
+        return jsonify({"success": True, "data": {"metrics": met, **result}, "backtest_id": backtest_id})
+    except Exception as e:
+        runtime = time.time() - t0
+        finish_backtest_run(backtest_id, "failed", metrics={}, result={}, error=f"数据获取失败: {e}", runtime_seconds=runtime)
+        return jsonify({"error": f"数据获取失败: {e}", "backtest_id": backtest_id}), 502
+
+
+@app.route("/api/backtests", methods=["GET"])
+def backtest_runs_list():
+    _ensure_strategy_library()
+    from strategy_store import list_backtest_runs
+    page = int(request.args.get("page", 1))
+    page_size = int(request.args.get("pageSize", 20))
+    status = (request.args.get("status") or "").strip().lower()
+    strategy_id = (request.args.get("strategy_id") or "").strip()
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    start_date = (request.args.get("start_date") or "").strip()
+    end_date = (request.args.get("end_date") or "").strip()
+    data = list_backtest_runs(page=page, page_size=page_size, status=status, strategy_id=strategy_id, symbol=symbol, start_date=start_date, end_date=end_date)
+    return jsonify({"success": True, **data})
+
+
+@app.route("/api/backtests/<int:bid>", methods=["GET"])
+def backtest_runs_detail(bid):
+    _ensure_strategy_library()
+    from strategy_store import get_backtest_run, list_trades
+    item = get_backtest_run(bid)
+    if not item:
+        return jsonify({"error": "回测实例不存在"}), 404
+    trades = list_trades(bid)
+    return jsonify({"success": True, "data": {"backtest_info": item, "trades": trades}})
+
+
+@app.route("/api/backtests/<int:bid>/debug", methods=["GET"])
+def backtest_runs_debug(bid):
+    _ensure_strategy_library()
+    from strategy_store import get_backtest_run, list_trades
+    item = get_backtest_run(bid)
+    if not item:
+        return jsonify({"error": "回测实例不存在"}), 404
+    trades = list_trades(bid)
+    result = item.get("result") or {}
+    by_symbol = result.get("by_symbol") or {}
+    positions = {}
+    transitions = {}
+    for sym, data in (by_symbol or {}).items():
+        pos = data.get("positions") or []
+        positions[sym] = pos[-200:] if len(pos) > 200 else pos
+        chg = 0
+        for i in range(1, len(pos)):
+            if (pos[i - 1] <= 0.5 and pos[i] > 0.5) or (pos[i - 1] > 0.5 and pos[i] <= 0.5):
+                chg += 1
+        transitions[sym] = chg
+    checks = {
+        "trades_count": len(trades),
+        "symbols": item.get("symbols") or [],
+        "has_nonzero_return": bool(abs(float(item.get("total_return") or 0)) > 1e-9),
+        "positions_transitions": transitions,
+        "rule1_has_trades_when_nonzero_return": (len(trades) > 0) if abs(float(item.get("total_return") or 0)) > 1e-9 else True,
+    }
+    return jsonify({
+        "success": True,
+        "data": {
+            "backtest_info": item,
+            "checks": checks,
+            "positions": positions,
+            "trades": trades,
+        }
+    })
+
+
 # ============================================================
 # 热门榜单 / 智能选股 (akshare)
 # ============================================================
@@ -3117,6 +3675,22 @@ def index():
     except:
         pass
     return resp
+
+@app.route("/backtest")
+def backtest_list_page():
+    return index()
+
+@app.route("/backtest/")
+def backtest_list_page_slash():
+    return index()
+
+@app.route("/backtest/<int:bid>")
+def backtest_detail_page(bid):
+    return index()
+
+@app.route("/backtest/<int:bid>/")
+def backtest_detail_page_slash(bid):
+    return index()
 
 @app.route("/<path:path>")
 def static_files(path):

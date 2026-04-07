@@ -3879,6 +3879,8 @@ function hideAllAppViews() {
         'overviewSection',
         'watchlistSection',
         'backtestSection',
+        'backtestDetailSection',
+        'strategyLibrarySection',
         'settingsSection',
         'aiReportSection',
         'analysisSection',
@@ -3907,6 +3909,8 @@ function expandGroupForView(view) {
         news: 'stockAnalysis',
         watchlist: 'stockAnalysis',
         backtest: 'trading',
+        backtestDetail: 'trading',
+        strategyLibrary: 'trading',
         portfolio: 'trading',
         myPortfolio: 'trading',
         diary: 'trading',
@@ -3960,8 +3964,16 @@ function appNavigate(view) {
     }
     
     if (view === 'backtest') {
-        const el = document.getElementById('backtestSection');
+        navigateBacktestList();
+        return;
+    }
+
+    if (view === 'strategyLibrary') {
+        const el = document.getElementById('strategyLibrarySection');
         if (el) el.classList.remove('hidden');
+        if (searchSection) searchSection.classList.add('hidden');
+        initStrategyLibraryUIOnce();
+        loadStrategyLibrary();
         return;
     }
     
@@ -4268,6 +4280,758 @@ async function refreshWatchlistIndicators() {
     saveWatchlist(list);
 }
 
+let strategyLibScope = 'all';
+let strategyLibPage = 1;
+const strategyLibPageSize = 12;
+let strategySelectedId = null;
+let strategyEditingId = null;
+let strategyBacktestId = null;
+let strategyEquityChart = null;
+let backtestRunsPage = 1;
+const backtestRunsPageSize = 12;
+let backtestSelectedId = null;
+let backtestEquityChart = null;
+let currentBacktestDetailId = null;
+
+function initStrategyLibraryUIOnce() {
+    const input = document.getElementById('strategySearchInput');
+    if (input && input.dataset.bound !== '1') {
+        input.dataset.bound = '1';
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                strategyLibPage = 1;
+                loadStrategyLibrary();
+            }
+        });
+    }
+}
+
+function switchStrategyScope(scope) {
+    strategyLibScope = scope;
+    strategyLibPage = 1;
+    const tabs = document.querySelectorAll('.strategy-lib-tab');
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.scope === scope));
+    loadStrategyLibrary();
+}
+
+function _strategyBuiltinParam() {
+    if (strategyLibScope === 'builtin') return '1';
+    if (strategyLibScope === 'custom') return '0';
+    return '';
+}
+
+async function loadStrategyLibrary(page) {
+    if (page) strategyLibPage = page;
+    const listEl = document.getElementById('strategyList');
+    const qInput = document.getElementById('strategySearchInput');
+    const q = qInput ? qInput.value.trim() : '';
+    const builtin = _strategyBuiltinParam();
+    const url = `/api/strategy-library?q=${encodeURIComponent(q)}&builtin=${encodeURIComponent(builtin)}&page=${encodeURIComponent(strategyLibPage)}&pageSize=${encodeURIComponent(strategyLibPageSize)}`;
+    if (listEl) listEl.innerHTML = '<div style="color:#8892b0;padding:10px;">加载中...</div>';
+    try {
+        const resp = await apiFetch(url);
+        let data = null;
+        try {
+            data = await resp.json();
+        } catch (e) {
+            const txt = await resp.text().catch(() => '');
+            const head = (txt || '').slice(0, 120).replace(/\s+/g, ' ').trim();
+            throw new Error(`返回非JSON（${resp.status}）：${head || 'empty body'}`);
+        }
+        if (!resp.ok || !data.success) throw new Error((data && data.error) || `加载失败(${resp.status})`);
+        renderStrategyList(data.items || [], data.total || 0, data.page || 1, data.page_size || strategyLibPageSize);
+    } catch (e) {
+        if (listEl) listEl.innerHTML = `<div style="color:#ff4757;padding:10px;">${escapeHtml(e && e.message ? e.message : '加载失败')}</div>`;
+    }
+}
+
+function renderStrategyList(items, total, page, pageSize) {
+    const listEl = document.getElementById('strategyList');
+    const pagEl = document.getElementById('strategyLibPagination');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (!items.length) {
+        listEl.innerHTML = '<div style="color:#8892b0;padding:10px;">暂无策略</div>';
+    } else {
+        items.forEach(it => {
+            const tags = Array.isArray(it.tags) ? it.tags.slice(0, 4) : [];
+            const tagHtml = tags.map(t => `<span class="strategy-tag">${escapeHtml(String(t))}</span>`).join('');
+            const isActive = strategySelectedId === it.id;
+            listEl.innerHTML += `
+                <div class="strategy-list-item ${isActive ? 'active' : ''}" onclick="selectStrategy(${it.id})">
+                    <div class="strategy-list-title">${escapeHtml(it.name || '')}</div>
+                    <div class="strategy-list-desc">${escapeHtml((it.description || '').slice(0, 80))}</div>
+                    <div class="strategy-list-meta">
+                        ${it.type ? `<span class="strategy-tag">${escapeHtml(it.type)}</span>` : ''}
+                        ${it.is_builtin ? `<span class="strategy-tag">内置</span>` : `<span class="strategy-tag">自定义</span>`}
+                        ${tagHtml}
+                    </div>
+                </div>
+            `;
+        });
+    }
+
+    if (pagEl) {
+        const pages = total > 0 ? Math.ceil(total / pageSize) : 1;
+        const cur = Math.min(Math.max(page, 1), pages);
+        pagEl.innerHTML = `
+            <span class="news-page-info">共 ${total} 条，第 ${cur}/${pages} 页</span>
+            <button class="news-page-btn" onclick="loadStrategyLibrary(1)" ${cur <= 1 ? 'disabled' : ''}>首页</button>
+            <button class="news-page-btn" onclick="loadStrategyLibrary(${cur - 1})" ${cur <= 1 ? 'disabled' : ''}>上一页</button>
+            <button class="news-page-btn" onclick="loadStrategyLibrary(${cur + 1})" ${cur >= pages ? 'disabled' : ''}>下一页</button>
+            <button class="news-page-btn" onclick="loadStrategyLibrary(${pages})" ${cur >= pages ? 'disabled' : ''}>末页</button>
+        `;
+    }
+}
+
+async function selectStrategy(id) {
+    strategySelectedId = id;
+    loadStrategyLibrary(strategyLibPage);
+    const detailEl = document.getElementById('strategyDetail');
+    if (detailEl) detailEl.innerHTML = '<div style="color:#8892b0;padding:10px;">加载详情...</div>';
+    try {
+        const resp = await apiFetch(`/api/strategy-library/${id}`);
+        let data = null;
+        try {
+            data = await resp.json();
+        } catch (e) {
+            const txt = await resp.text().catch(() => '');
+            const head = (txt || '').slice(0, 120).replace(/\s+/g, ' ').trim();
+            throw new Error(`返回非JSON（${resp.status}）：${head || 'empty body'}`);
+        }
+        if (!resp.ok || !data.success) throw new Error(data.error || `加载失败(${resp.status})`);
+        renderStrategyDetail(data.data);
+    } catch (e) {
+        if (detailEl) detailEl.innerHTML = '<div style="color:#ff4757;padding:10px;">加载失败</div>';
+    }
+}
+
+function _highlightPython(code) {
+    const esc = escapeHtml(code || '');
+    return esc
+        .replace(/\b(def|return|import|from|for|while|if|elif|else|try|except|as|with|class)\b/g, '<span class="ta-metric">$1</span>')
+        .replace(/\b(True|False|None)\b/g, '<span class="ta-num">$1</span>')
+        .replace(/("([^"\\\\]|\\\\.)*"|'([^'\\\\]|\\\\.)*')/g, '<span class="ta-badge ta-badge-hold">$1</span>');
+}
+
+function renderStrategyDetail(s) {
+    const detailEl = document.getElementById('strategyDetail');
+    if (!detailEl) return;
+    const tags = Array.isArray(s.tags) ? s.tags : [];
+    const factors = Array.isArray(s.factors) ? s.factors : [];
+    const tagHtml = tags.map(t => `<span class="strategy-tag">${escapeHtml(String(t))}</span>`).join('');
+    const factorHtml = factors.map(f => `<span class="strategy-tag">${escapeHtml(String(f))}</span>`).join('');
+    const isBuiltin = !!s.is_builtin;
+
+    detailEl.innerHTML = `
+        <div class="strategy-detail-title">${escapeHtml(s.name || '')}</div>
+        <div class="strategy-detail-desc">${escapeHtml(s.description || '')}</div>
+        <div class="strategy-list-meta">${s.type ? `<span class="strategy-tag">${escapeHtml(s.type)}</span>` : ''}${isBuiltin ? `<span class="strategy-tag">内置</span>` : `<span class="strategy-tag">自定义</span>`}${tagHtml}</div>
+        <div class="strategy-factors">${factorHtml}</div>
+        <div class="strategy-detail-actions">
+            <button class="btn-primary" onclick="openStrategyBacktest(${s.id})">开始回测</button>
+            <button class="btn-secondary" onclick="openStrategyEditor(${s.id})" ${isBuiltin ? 'disabled' : ''}>编辑策略</button>
+            <button class="btn-secondary" onclick="deleteStrategyLibrary(${s.id})" ${isBuiltin ? 'disabled' : ''}>删除策略</button>
+        </div>
+        <div class="strategy-code">${_highlightPython(s.code || '')}</div>
+        <div id="strategyBacktestResult" style="margin-top:14px;"></div>
+    `;
+}
+
+function openStrategyEditor(id) {
+    strategyEditingId = id || null;
+    const modal = document.getElementById('strategyEditorModal');
+    if (!modal) return;
+    const titleEl = document.getElementById('strategyEditorTitle');
+    if (titleEl) titleEl.textContent = id ? '编辑策略' : '新建策略';
+
+    document.getElementById('strategyEditName').value = '';
+    document.getElementById('strategyEditDesc').value = '';
+    document.getElementById('strategyEditType').value = '';
+    document.getElementById('strategyEditTags').value = '';
+    document.getElementById('strategyEditParams').value = '{"fast_period":12,"slow_period":26}';
+    document.getElementById('strategyEditCode').value = "import numpy as np\nimport pandas as pd\n\ndef strategy(df, params):\n    fast = int(params.get('fast_period', 12))\n    slow = int(params.get('slow_period', 26))\n    ema_fast = df['close'].ewm(span=fast, adjust=False).mean()\n    ema_slow = df['close'].ewm(span=slow, adjust=False).mean()\n    positions = pd.Series(np.where(ema_fast > ema_slow, 1.0, 0.0), index=df.index)\n    return positions\n";
+
+    if (id) {
+        apiFetch(`/api/strategy-library/${id}`).then(r => r.json()).then(res => {
+            if (!res.success) return;
+            const s = res.data;
+            document.getElementById('strategyEditName').value = s.name || '';
+            document.getElementById('strategyEditDesc').value = s.description || '';
+            document.getElementById('strategyEditType').value = s.type || '';
+            document.getElementById('strategyEditTags').value = Array.isArray(s.tags) ? s.tags.join(',') : '';
+            document.getElementById('strategyEditParams').value = JSON.stringify(s.params || {}, null, 2);
+            document.getElementById('strategyEditCode').value = s.code || '';
+        });
+    }
+
+    modal.classList.remove('hidden');
+}
+
+function closeStrategyEditor() {
+    const modal = document.getElementById('strategyEditorModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function saveStrategyLibrary() {
+    const name = document.getElementById('strategyEditName').value.trim();
+    const description = document.getElementById('strategyEditDesc').value.trim();
+    const type = document.getElementById('strategyEditType').value.trim();
+    const tagsRaw = document.getElementById('strategyEditTags').value.trim();
+    const paramsRaw = document.getElementById('strategyEditParams').value.trim();
+    const code = document.getElementById('strategyEditCode').value;
+    const tags = tagsRaw ? tagsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+    let params = {};
+    try {
+        params = paramsRaw ? JSON.parse(paramsRaw) : {};
+    } catch (e) {
+        alert('参数 JSON 格式错误');
+        return;
+    }
+    if (!name || !description || !code.trim()) {
+        alert('名称/描述/代码不能为空');
+        return;
+    }
+    const payload = { name, description, type, tags, params, code };
+    try {
+        const resp = await apiFetch(strategyEditingId ? `/api/strategy-library/${strategyEditingId}` : '/api/strategy-library', {
+            method: strategyEditingId ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) throw new Error(data.error || '保存失败');
+        closeStrategyEditor();
+        loadStrategyLibrary(1);
+    } catch (e) {
+        alert(e && e.message ? e.message : '保存失败');
+    }
+}
+
+async function deleteStrategyLibrary(id) {
+    if (!confirm('确认删除该策略？')) return;
+    try {
+        const resp = await apiFetch(`/api/strategy-library/${id}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) throw new Error(data.error || '删除失败');
+        if (strategySelectedId === id) {
+            const detailEl = document.getElementById('strategyDetail');
+            if (detailEl) detailEl.innerHTML = '<div class="strategy-detail-empty">选择一个策略查看详情</div>';
+            strategySelectedId = null;
+        }
+        loadStrategyLibrary(1);
+    } catch (e) {
+        alert(e && e.message ? e.message : '删除失败');
+    }
+}
+
+function openStrategyBacktest(id) {
+    strategyBacktestId = id;
+    const modal = document.getElementById('strategyBacktestModal');
+    if (!modal) return;
+    const now = new Date();
+    const end = now.toISOString().split('T')[0];
+    const startD = new Date(now);
+    startD.setFullYear(startD.getFullYear() - 1);
+    const start = startD.toISOString().split('T')[0];
+    document.getElementById('btStart').value = start;
+    document.getElementById('btEnd').value = end;
+    document.getElementById('btCash').value = '100000';
+    document.getElementById('btParams').value = '';
+    const hint = document.getElementById('btHint');
+    if (hint) hint.textContent = '';
+    modal.classList.remove('hidden');
+}
+
+function closeStrategyBacktest() {
+    const modal = document.getElementById('strategyBacktestModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function runStrategyBacktest() {
+    const hint = document.getElementById('btHint');
+    const symbolRaw = document.getElementById('btSymbol').value.trim();
+    const start_date = document.getElementById('btStart').value;
+    const end_date = document.getElementById('btEnd').value;
+    const initial_cash = Number(document.getElementById('btCash').value) || 100000;
+    const paramsRaw = document.getElementById('btParams').value.trim();
+    let params = {};
+    try {
+        params = paramsRaw ? JSON.parse(paramsRaw) : {};
+    } catch {
+        if (hint) hint.textContent = '参数 JSON 格式错误';
+        return;
+    }
+    if (!strategyBacktestId) return;
+    if (!symbolRaw) {
+        if (hint) hint.textContent = '请填写股票代码';
+        return;
+    }
+    const symbols = symbolRaw.replace('，', ',').replace('；', ',').split(',').map(s => s.trim()).filter(Boolean);
+    if (hint) hint.textContent = '回测中...';
+    try {
+        const resp = await apiFetch(`/api/strategy-library/${strategyBacktestId}/backtest`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol: symbolRaw, symbols, start_date, end_date, initial_cash, params })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) throw new Error(data.error || '回测失败');
+        closeStrategyBacktest();
+        renderBacktestResult(data.data);
+        loadBacktestRuns(1);
+        if (hint) hint.textContent = '';
+    } catch (e) {
+        if (hint) hint.textContent = e && e.message ? e.message : '回测失败';
+    }
+}
+
+function renderBacktestResult(res) {
+    const box = document.getElementById('strategyBacktestResult');
+    if (!box) return;
+    const m = res.metrics || {};
+    box.innerHTML = `
+        <div class="ta-section">
+            <div class="ta-section-title">回测结果</div>
+            <div class="ta-section-body">
+                <div class="watchlist-metrics">
+                    <div class="watchlist-metric"><div class="k">总收益率</div><div class="v">${formatMetric((m.total_return * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">年化收益</div><div class="v">${formatMetric((m.annualized_return * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">最大回撤</div><div class="v">${formatMetric((m.max_drawdown * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">夏普比率</div><div class="v">${formatMetric(m.sharpe)}</div></div>
+                    <div class="watchlist-metric"><div class="k">胜率</div><div class="v">${formatMetric((m.win_rate * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">交易次数</div><div class="v">${formatMetric(m.trades)}</div></div>
+                </div>
+                <div style="margin-top:12px;">
+                    <canvas id="strategyEquityChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+    `;
+    renderEquityChart(res.equity_curve || [], res.trades_list || []);
+}
+
+function renderEquityChart(curve, trades) {
+    if (typeof Chart === 'undefined') return;
+    const el = document.getElementById('strategyEquityChart');
+    if (!el) return;
+    if (strategyEquityChart) {
+        strategyEquityChart.destroy();
+        strategyEquityChart = null;
+    }
+    const labels = curve.map(x => x.date);
+    const data = curve.map(x => x.equity);
+    const points = [];
+    const exitPoints = [];
+    const mapIdx = {};
+    labels.forEach((d, i) => { mapIdx[d] = i; });
+    trades.forEach(t => {
+        const bt = t.buy_time || t.entry_date;
+        const st = t.sell_time || t.exit_date;
+        if (bt && mapIdx[bt] != null) {
+            const i = mapIdx[bt];
+            points.push({ x: labels[i], y: data[i] });
+        }
+        if (st && mapIdx[st] != null) {
+            const i = mapIdx[st];
+            exitPoints.push({ x: labels[i], y: data[i] });
+        }
+    });
+    strategyEquityChart = new Chart(el.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Equity', data, borderColor: '#00d4ff', backgroundColor: 'rgba(0,212,255,0.10)', tension: 0.15, pointRadius: 0 },
+                { label: 'Buy', type: 'scatter', data: points, pointBackgroundColor: '#00ff88', pointBorderColor: '#00ff88', pointRadius: 4 },
+                { label: 'Sell', type: 'scatter', data: exitPoints, pointBackgroundColor: '#ff4757', pointBorderColor: '#ff4757', pointRadius: 4 }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { labels: { color: '#ccd6f6' } } },
+            scales: {
+                x: { ticks: { color: '#8892b0', maxTicksLimit: 6 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y: { ticks: { color: '#8892b0' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+            }
+        }
+    });
+}
+
+async function loadBacktestRuns(page) {
+    if (page) backtestRunsPage = page;
+    const listEl = document.getElementById('backtestRunsList');
+    const pagEl = document.getElementById('backtestRunsPagination');
+    if (listEl) listEl.innerHTML = '<div style="color:#8892b0;padding:10px;">加载中...</div>';
+    try {
+        const sym = (document.getElementById('btFilterSymbol') && document.getElementById('btFilterSymbol').value || '').trim();
+        const sid = (document.getElementById('btFilterStrategyId') && document.getElementById('btFilterStrategyId').value || '').trim();
+        const sd = (document.getElementById('btFilterStart') && document.getElementById('btFilterStart').value || '').trim();
+        const ed = (document.getElementById('btFilterEnd') && document.getElementById('btFilterEnd').value || '').trim();
+        const qs = new URLSearchParams();
+        qs.set('page', String(backtestRunsPage));
+        qs.set('pageSize', String(backtestRunsPageSize));
+        if (sym) qs.set('symbol', sym.split(',')[0].trim().toUpperCase());
+        if (sid) qs.set('strategy_id', sid);
+        if (sd) qs.set('start_date', sd);
+        if (ed) qs.set('end_date', ed);
+        const resp = await apiFetch(`/api/backtests?${qs.toString()}`);
+        let data = null;
+        try {
+            data = await resp.json();
+        } catch (e) {
+            const txt = await resp.text().catch(() => '');
+            const head = (txt || '').slice(0, 120).replace(/\s+/g, ' ').trim();
+            throw new Error(`返回非JSON（${resp.status}）：${head || 'empty body'}`);
+        }
+        if (!resp.ok || !data.success) throw new Error((data && data.error) || `加载失败(${resp.status})`);
+        renderBacktestRunsList(data.items || [], data.total || 0, data.page || 1, data.page_size || backtestRunsPageSize);
+    } catch (e) {
+        if (listEl) listEl.innerHTML = `<div style="color:#ff4757;padding:10px;">${escapeHtml(e && e.message ? e.message : '加载失败')}</div>`;
+        if (pagEl) pagEl.innerHTML = '';
+    }
+}
+
+function _statusBadge(status) {
+    const s = (status || '').toLowerCase();
+    if (s === 'done') return '<span class="strategy-tag">完成</span>';
+    if (s === 'running') return '<span class="strategy-tag">运行中</span>';
+    if (s === 'failed') return '<span class="strategy-tag">失败</span>';
+    return `<span class="strategy-tag">${escapeHtml(status || '--')}</span>`;
+}
+
+function renderBacktestRunsList(items, total, page, pageSize) {
+    const listEl = document.getElementById('backtestRunsList');
+    const pagEl = document.getElementById('backtestRunsPagination');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (!items.length) {
+        listEl.innerHTML = '<div style="color:#8892b0;padding:10px;">暂无回测实例</div>';
+    } else {
+        items.forEach(it => {
+            const isActive = backtestSelectedId === it.id;
+            const symbols = Array.isArray(it.symbols) ? it.symbols : [];
+            const symText = symbols.length ? symbols.join(' / ') : '';
+            const tr = it.total_return != null ? (Number(it.total_return) * 100).toFixed(2) + '%' : '--';
+            const mdd = it.max_drawdown != null ? (Number(it.max_drawdown) * 100).toFixed(2) + '%' : '--';
+            listEl.innerHTML += `
+                <div class="strategy-list-item ${isActive ? 'active' : ''}" onclick="navigateBacktestDetail(${it.id})">
+                    <div class="strategy-list-title">${escapeHtml(it.name ? `${it.name}` : `回测#${it.id}`)}</div>
+                    <div class="strategy-list-desc">${escapeHtml((it.strategy_name || ('策略#' + it.strategy_id)) + (symText ? ` · ${symText}` : ''))}</div>
+                    <div class="strategy-list-meta">
+                        ${_statusBadge(it.status)}
+                        <span class="strategy-tag">${escapeHtml((it.start_date || '') + ' → ' + (it.end_date || ''))}</span>
+                        <span class="strategy-tag">总收益 ${escapeHtml(tr)}</span>
+                        <span class="strategy-tag">回撤 ${escapeHtml(mdd)}</span>
+                    </div>
+                </div>
+            `;
+        });
+    }
+    if (pagEl) {
+        const pages = total > 0 ? Math.ceil(total / pageSize) : 1;
+        const cur = Math.min(Math.max(page, 1), pages);
+        pagEl.innerHTML = `
+            <span class="news-page-info">共 ${total} 条，第 ${cur}/${pages} 页</span>
+            <button class="news-page-btn" onclick="loadBacktestRuns(1)" ${cur <= 1 ? 'disabled' : ''}>首页</button>
+            <button class="news-page-btn" onclick="loadBacktestRuns(${cur - 1})" ${cur <= 1 ? 'disabled' : ''}>上一页</button>
+            <button class="news-page-btn" onclick="loadBacktestRuns(${cur + 1})" ${cur >= pages ? 'disabled' : ''}>下一页</button>
+            <button class="news-page-btn" onclick="loadBacktestRuns(${pages})" ${cur >= pages ? 'disabled' : ''}>末页</button>
+        `;
+    }
+}
+
+function navigateBacktestList() {
+    try {
+        history.pushState({ page: 'backtest' }, '', '/backtest');
+    } catch {}
+    showBacktestListView();
+}
+
+function navigateBacktestDetail(id) {
+    backtestSelectedId = id;
+    try {
+        history.pushState({ page: 'backtestDetail', id }, '', `/backtest/${id}`);
+    } catch {}
+    showBacktestDetailView(id);
+}
+
+function showBacktestListView() {
+    hideAllAppViews();
+    expandGroupForView('backtest');
+    setActiveSidebarItem('backtest');
+    persistAppSettings({ ...appSettings, lastView: 'backtest' });
+    const searchSection = document.querySelector('.search-section');
+    if (searchSection) searchSection.classList.add('hidden');
+    const el = document.getElementById('backtestSection');
+    if (el) el.classList.remove('hidden');
+    loadBacktestRuns(1);
+}
+
+function navigateBacktestListNoPush() {
+    showBacktestListView();
+}
+
+async function showBacktestDetailView(id) {
+    currentBacktestDetailId = id;
+    hideAllAppViews();
+    expandGroupForView('backtestDetail');
+    setActiveSidebarItem('backtest');
+    persistAppSettings({ ...appSettings, lastView: 'backtest' });
+    const searchSection = document.querySelector('.search-section');
+    if (searchSection) searchSection.classList.add('hidden');
+    const el = document.getElementById('backtestDetailSection');
+    if (el) el.classList.remove('hidden');
+    const box = document.getElementById('backtestDetailContent');
+    if (box) box.innerHTML = '<div class="strategy-detail-empty">加载中...</div>';
+    await loadBacktestDetail(id);
+}
+
+async function refreshBacktestDetail() {
+    if (currentBacktestDetailId) {
+        await loadBacktestDetail(currentBacktestDetailId);
+    }
+}
+
+async function openBacktestDebug() {
+    if (!currentBacktestDetailId) return;
+    try {
+        const resp = await apiFetch(`/api/backtests/${currentBacktestDetailId}/debug`);
+        const data = await resp.json();
+        alert(JSON.stringify(data, null, 2));
+    } catch (e) {
+        alert(e && e.message ? e.message : 'debug 失败');
+    }
+}
+
+async function loadBacktestDetail(id) {
+    const box = document.getElementById('backtestDetailContent');
+    try {
+        const resp = await apiFetch(`/api/backtests/${id}`);
+        let data = null;
+        try {
+            data = await resp.json();
+        } catch (e) {
+            const txt = await resp.text().catch(() => '');
+            const head = (txt || '').slice(0, 120).replace(/\s+/g, ' ').trim();
+            throw new Error(`返回非JSON（${resp.status}）：${head || 'empty body'}`);
+        }
+        if (!resp.ok || !data.success) throw new Error((data && data.error) || `加载失败(${resp.status})`);
+        const info = data.data && data.data.backtest_info ? data.data.backtest_info : (data.data || {});
+        const trades = data.data && data.data.trades ? data.data.trades : (info.trades || []);
+        renderBacktestDetailPage(info, trades);
+    } catch (e) {
+        if (box) box.innerHTML = `<div style="color:#ff4757;padding:10px;">${escapeHtml(e && e.message ? e.message : '加载失败')}</div>`;
+    }
+}
+
+function renderBacktestDetailPage(info, trades) {
+    const box = document.getElementById('backtestDetailContent');
+    if (!box) return;
+    const r = info || {};
+    const status = (r.status || '').toLowerCase();
+    const symbols = Array.isArray(r.symbols) ? r.symbols : [];
+    const symText = symbols.length ? symbols.join(' / ') : '';
+    const paramsText = r.params ? JSON.stringify(r.params, null, 2) : '{}';
+
+    box.innerHTML = `
+        <div class="strategy-detail-title">${escapeHtml(r.name || ('回测#' + r.id))}</div>
+        <div class="strategy-detail-desc">${escapeHtml(r.strategy_name || ('策略#' + r.strategy_id))}</div>
+        <div class="strategy-list-meta">
+            ${_statusBadge(r.status)}
+            <span class="strategy-tag">${escapeHtml((r.start_date || '') + ' → ' + (r.end_date || ''))}</span>
+            <span class="strategy-tag">${escapeHtml(symText || '')}</span>
+            <span class="strategy-tag">初始资金 ${escapeHtml(String(r.initial_capital || ''))}</span>
+        </div>
+        <div class="strategy-code" style="margin-top:12px;white-space:pre-wrap;">${escapeHtml(paramsText)}</div>
+        ${status === 'failed' ? `<div style="color:#ff4757;margin-top:10px;">${escapeHtml(r.error || '失败')}</div>` : ''}
+        <div id="backtestDetailResult" style="margin-top:14px;"></div>
+    `;
+
+    const result = r.result || {};
+    const metrics = r.metrics || {
+        total_return: r.total_return,
+        annualized_return: r.annualized_return,
+        max_drawdown: r.max_drawdown,
+        sharpe: r.sharpe_ratio,
+        win_rate: r.win_rate,
+        trades: (trades || []).length
+    };
+
+    const body = document.getElementById('backtestDetailResult');
+    if (status === 'done') {
+        const merged = result && result.equity_curve ? result : { equity_curve: [], trades_list: [] };
+        renderBacktestDetailResult(body, merged, metrics, trades || []);
+    } else if (status === 'running') {
+        if (body) body.innerHTML = '<div style="color:#8892b0;">回测运行中，稍后刷新查看结果。</div>';
+    }
+}
+
+function renderBacktestDetailResult(container, result, metrics, trades) {
+    const m = metrics || (result.metrics || {});
+    const curve = result.equity_curve || [];
+    container.innerHTML = `
+        <div class="ta-section">
+            <div class="ta-section-title">回测结果</div>
+            <div class="ta-section-body">
+                <div class="watchlist-metrics">
+                    <div class="watchlist-metric"><div class="k">总收益率</div><div class="v">${formatMetric(((m.total_return || 0) * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">年化收益</div><div class="v">${formatMetric(((m.annualized_return || 0) * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">最大回撤</div><div class="v">${formatMetric(((m.max_drawdown || 0) * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">夏普比率</div><div class="v">${formatMetric(m.sharpe)}</div></div>
+                    <div class="watchlist-metric"><div class="k">胜率</div><div class="v">${formatMetric(((m.win_rate || 0) * 100).toFixed(2) + '%')}</div></div>
+                    <div class="watchlist-metric"><div class="k">交易次数</div><div class="v">${formatMetric(m.trades)}</div></div>
+                </div>
+                <div style="margin-top:12px;">
+                    <canvas id="backtestEquityChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="ta-section">
+            <div class="ta-section-title">交易明细</div>
+            <div class="ta-section-body">
+                <div class="strategy-lib-actions" style="margin-bottom:10px;">
+                    <input type="text" id="tradeFilterSymbol" class="strategy-lib-search" placeholder="按股票筛选（可选）">
+                    <button class="btn-secondary" onclick="applyTradeFilter()">筛选</button>
+                    <button class="btn-secondary" onclick="resetTradeFilter()">重置</button>
+                </div>
+                <div class="finance-table-wrapper">
+                    <table class="finance-table" id="tradeTable"></table>
+                </div>
+            </div>
+        </div>
+    `;
+    window.__bt_trades_cache = Array.isArray(trades) ? trades : [];
+    renderBacktestEquityChart(curve, trades);
+    renderTradeTable(window.__bt_trades_cache);
+}
+
+function renderBacktestEquityChart(curve, trades) {
+    if (typeof Chart === 'undefined') return;
+    const el = document.getElementById('backtestEquityChart');
+    if (!el) return;
+    if (backtestEquityChart) {
+        backtestEquityChart.destroy();
+        backtestEquityChart = null;
+    }
+    const labels = curve.map(x => x.date);
+    const data = curve.map(x => x.equity);
+    const points = [];
+    const exitPoints = [];
+    const mapIdx = {};
+    labels.forEach((d, i) => { mapIdx[d] = i; });
+    trades.forEach(t => {
+        const bt = t.buy_time || t.entry_date;
+        const st = t.sell_time || t.exit_date;
+        if (bt && mapIdx[bt] != null) {
+            const i = mapIdx[bt];
+            points.push({ x: labels[i], y: data[i] });
+        }
+        if (st && mapIdx[st] != null) {
+            const i = mapIdx[st];
+            exitPoints.push({ x: labels[i], y: data[i] });
+        }
+    });
+    backtestEquityChart = new Chart(el.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Equity', data, borderColor: '#00d4ff', backgroundColor: 'rgba(0,212,255,0.10)', tension: 0.15, pointRadius: 0 },
+                { label: 'Buy', type: 'scatter', data: points, pointBackgroundColor: '#00ff88', pointBorderColor: '#00ff88', pointRadius: 4 },
+                { label: 'Sell', type: 'scatter', data: exitPoints, pointBackgroundColor: '#ff4757', pointBorderColor: '#ff4757', pointRadius: 4 }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { labels: { color: '#ccd6f6' } } },
+            scales: {
+                x: { ticks: { color: '#8892b0', maxTicksLimit: 6 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y: { ticks: { color: '#8892b0' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+            }
+        }
+    });
+}
+
+function resetBacktestFilters() {
+    const s = document.getElementById('btFilterSymbol');
+    const sid = document.getElementById('btFilterStrategyId');
+    const sd = document.getElementById('btFilterStart');
+    const ed = document.getElementById('btFilterEnd');
+    if (s) s.value = '';
+    if (sid) sid.value = '';
+    if (sd) sd.value = '';
+    if (ed) ed.value = '';
+    loadBacktestRuns(1);
+}
+
+function applyTradeFilter() {
+    const input = document.getElementById('tradeFilterSymbol');
+    const sym = (input && input.value ? input.value.trim().toUpperCase() : '');
+    const all = window.__bt_trades_cache || [];
+    const filtered = sym ? all.filter(t => String(t.symbol || '').toUpperCase().includes(sym)) : all;
+    renderTradeTable(filtered);
+}
+
+function resetTradeFilter() {
+    const input = document.getElementById('tradeFilterSymbol');
+    if (input) input.value = '';
+    renderTradeTable(window.__bt_trades_cache || []);
+}
+
+function renderTradeTable(trades) {
+    const table = document.getElementById('tradeTable');
+    if (!table) return;
+    const rows = Array.isArray(trades) ? trades : [];
+    table.innerHTML = `
+        <thead>
+            <tr>
+                <th class="finance-th-index">股票</th>
+                <th class="finance-th">买入时间</th>
+                <th class="finance-th">买入价</th>
+                <th class="finance-th">卖出时间</th>
+                <th class="finance-th">卖出价</th>
+                <th class="finance-th">持仓周期</th>
+                <th class="finance-th">仓位(股)</th>
+                <th class="finance-th">收益</th>
+                <th class="finance-th">收益率</th>
+                <th class="finance-th">触发原因</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${rows.map(t => {
+                const pnl = Number(t.pnl || 0);
+                const pnlCls = pnl >= 0 ? 'finance-td-positive' : 'finance-td-negative';
+                const pr = Number(t.pnl_ratio || 0) * 100;
+                const prCls = pr >= 0 ? 'finance-td-positive' : 'finance-td-negative';
+                let hold = '--';
+                try {
+                    const b = t.buy_time ? new Date(t.buy_time) : null;
+                    const s = t.sell_time ? new Date(t.sell_time) : null;
+                    if (b && s && !isNaN(b.getTime()) && !isNaN(s.getTime())) {
+                        const days = Math.max(0, Math.round((s.getTime() - b.getTime()) / (24 * 3600 * 1000)));
+                        hold = `${days}天`;
+                    }
+                } catch {}
+                return `
+                    <tr>
+                        <td class="finance-td-index">${escapeHtml(t.symbol || '')}</td>
+                        <td class="finance-td">${escapeHtml(t.buy_time || '')}</td>
+                        <td class="finance-td">${escapeHtml(String(t.buy_price || ''))}</td>
+                        <td class="finance-td">${escapeHtml(t.sell_time || '')}</td>
+                        <td class="finance-td">${escapeHtml(String(t.sell_price || ''))}</td>
+                        <td class="finance-td">${escapeHtml(hold)}</td>
+                        <td class="finance-td">${escapeHtml(String(t.position_size || ''))}</td>
+                        <td class="finance-td ${pnlCls}">${escapeHtml(String(pnl.toFixed(2)))}</td>
+                        <td class="finance-td ${prCls}">${escapeHtml(String(pr.toFixed(2) + '%'))}</td>
+                        <td class="finance-td" style="text-align:left;">${escapeHtml(t.signal_reason || '')}</td>
+                    </tr>
+                `;
+            }).join('')}
+        </tbody>
+    `;
+}
+
 async function diagnoseTradingAgents() {
     const hint = document.getElementById('taHint');
     if (hint) hint.textContent = '诊断中...';
@@ -4527,8 +5291,26 @@ document.addEventListener('DOMContentLoaded', function() {
         if (caret) caret.textContent = isCollapsed ? '▸' : '▾';
     });
     
-    const initialView = (appSettings && appSettings.lastView) ? appSettings.lastView : 'analysis';
-    appNavigate(initialView);
+    const handleRoute = () => {
+        const p = window.location && window.location.pathname ? window.location.pathname : '/';
+        const m = p.match(/^\/backtest\/(\d+)$/);
+        if (m) {
+            showBacktestDetailView(Number(m[1]));
+            return;
+        }
+        if (p === '/backtest') {
+            navigateBacktestListNoPush();
+            return;
+        }
+        const initialView = (appSettings && appSettings.lastView) ? appSettings.lastView : 'analysis';
+        appNavigate(initialView);
+    };
+
+    window.addEventListener('popstate', () => {
+        handleRoute();
+    });
+
+    handleRoute();
 });
 
 // 切换K线周期

@@ -3,6 +3,7 @@ flask-cors
 requests
 akshare
 pandas
+numpy
 dashscope
 yfinance
 boto3

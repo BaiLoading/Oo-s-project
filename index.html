@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>股票智能分析系统</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css?v=5">
+    <link rel="stylesheet" href="style.css?v=12">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -54,6 +54,9 @@
                     <div class="sidebar-submenu" data-submenu="trading">
                         <button class="sidebar-item sidebar-item-child" data-view="backtest" onclick="appNavigate('backtest')">
                             <span class="sidebar-item-text">回测</span>
+                        </button>
+                        <button class="sidebar-item sidebar-item-child" data-view="strategyLibrary" onclick="appNavigate('strategyLibrary')">
+                            <span class="sidebar-item-text">策略库</span>
                         </button>
                         <button class="sidebar-item sidebar-item-child" data-view="portfolio" onclick="appNavigate('portfolio')">
                             <span class="sidebar-item-text">模拟交易</span>
@@ -164,10 +167,159 @@
             </div>
         </div>
 
-        <div id="backtestSection" class="placeholder-section hidden">
-            <div class="placeholder-card">
-                <h2>回测</h2>
-                <p>预留位置：后续接入回测接口与回测结果展示。</p>
+        <div id="backtestSection" class="hidden">
+            <div class="analysis-container">
+                <div class="analysis-panel full-width">
+                    <div class="analysis-header">
+                        <h2>📈 回测</h2>
+                        <p class="analysis-subtitle">回测实例列表</p>
+                    </div>
+
+                    <div class="strategy-lib-toolbar">
+                        <div class="strategy-lib-actions">
+                            <input type="text" id="btFilterSymbol" class="strategy-lib-search" placeholder="标的（AAPL 或 AAPL,TSLA）">
+                            <input type="number" id="btFilterStrategyId" class="strategy-lib-search" placeholder="策略ID（可选）">
+                            <input type="date" id="btFilterStart" class="strategy-lib-search" placeholder="开始日期">
+                            <input type="date" id="btFilterEnd" class="strategy-lib-search" placeholder="结束日期">
+                            <button class="btn-secondary" onclick="loadBacktestRuns(1)">筛选</button>
+                            <button class="btn-secondary" onclick="resetBacktestFilters()">重置</button>
+                            <button class="btn-secondary" onclick="loadBacktestRuns()">刷新</button>
+                        </div>
+                    </div>
+
+                    <div class="strategy-lib-list">
+                        <div id="backtestRunsList" class="strategy-list"></div>
+                        <div class="strategy-lib-pagination" id="backtestRunsPagination"></div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <div id="backtestDetailSection" class="hidden">
+            <div class="analysis-container">
+                <div class="analysis-panel full-width">
+                    <div class="analysis-header">
+                        <h2>📊 回测详情</h2>
+                        <p class="analysis-subtitle">收益分析 + 交易明细</p>
+                    </div>
+                    <div class="strategy-detail-actions">
+                        <button class="btn-secondary" onclick="navigateBacktestList()">返回列表</button>
+                        <button class="btn-secondary" onclick="refreshBacktestDetail()">刷新</button>
+                        <button class="btn-secondary" onclick="openBacktestDebug()">Debug</button>
+                    </div>
+                    <div id="backtestDetailContent" class="strategy-detail">
+                        <div class="strategy-detail-empty">加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="strategyLibrarySection" class="hidden">
+            <div class="analysis-container">
+                <div class="analysis-panel full-width">
+                    <div class="analysis-header">
+                        <h2>📚 策略库</h2>
+                        <p class="analysis-subtitle">策略开发 → 存储 → 回测 → 复用</p>
+                    </div>
+
+                    <div class="strategy-lib-toolbar">
+                        <div class="strategy-lib-tabs">
+                            <button class="strategy-lib-tab active" data-scope="all" onclick="switchStrategyScope('all')">全部</button>
+                            <button class="strategy-lib-tab" data-scope="builtin" onclick="switchStrategyScope('builtin')">内置</button>
+                            <button class="strategy-lib-tab" data-scope="custom" onclick="switchStrategyScope('custom')">我的</button>
+                        </div>
+                        <div class="strategy-lib-actions">
+                            <input type="text" id="strategySearchInput" class="strategy-lib-search" placeholder="搜索策略名称/描述">
+                            <button class="btn-secondary" onclick="loadStrategyLibrary()">搜索</button>
+                            <button class="btn-primary" onclick="openStrategyEditor()">新建策略</button>
+                        </div>
+                    </div>
+
+                    <div class="strategy-lib-layout">
+                        <div class="strategy-lib-list">
+                            <div id="strategyList" class="strategy-list"></div>
+                            <div class="strategy-lib-pagination" id="strategyLibPagination"></div>
+                        </div>
+                        <div class="strategy-lib-detail">
+                            <div id="strategyDetail" class="strategy-detail">
+                                <div class="strategy-detail-empty">选择一个策略查看详情</div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <div id="strategyEditorModal" class="modal hidden">
+            <div class="modal-content large">
+                <span class="close" onclick="closeStrategyEditor()">&times;</span>
+                <h2 id="strategyEditorTitle">新建策略</h2>
+                <div class="edit-user-form">
+                    <div class="form-group">
+                        <label>策略名称</label>
+                        <input type="text" id="strategyEditName" placeholder="例如：EMA Crossover 双均线">
+                    </div>
+                    <div class="form-group">
+                        <label>策略描述</label>
+                        <textarea id="strategyEditDesc" placeholder="简要说明策略逻辑"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>策略类型</label>
+                            <input type="text" id="strategyEditType" placeholder="例如：均线类">
+                        </div>
+                        <div class="form-group">
+                            <label>标签（逗号分隔）</label>
+                            <input type="text" id="strategyEditTags" placeholder="例如：EMA,趋势,均线">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>参数（JSON）</label>
+                        <textarea id="strategyEditParams" placeholder='{"fast_period":12,"slow_period":26}'></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>策略代码（必须包含 strategy(df, params)）</label>
+                        <textarea id="strategyEditCode" class="code-textarea" placeholder="import numpy as np\nimport pandas as pd\n\ndef strategy(df, params):\n    ...\n    return positions"></textarea>
+                    </div>
+                    <button class="btn-primary" onclick="saveStrategyLibrary()">保存</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="strategyBacktestModal" class="modal hidden">
+            <div class="modal-content">
+                <span class="close" onclick="closeStrategyBacktest()">&times;</span>
+                <h2>开始回测</h2>
+                <div class="edit-user-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>股票代码</label>
+                            <input type="text" id="btSymbol" placeholder="AAPL / MSFT / 600519.SS">
+                        </div>
+                        <div class="form-group">
+                            <label>开始日期</label>
+                            <input type="date" id="btStart">
+                        </div>
+                        <div class="form-group">
+                            <label>结束日期</label>
+                            <input type="date" id="btEnd">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>初始资金</label>
+                            <input type="number" id="btCash" placeholder="100000">
+                        </div>
+                        <div class="form-group">
+                            <label>参数覆盖（JSON，可选）</label>
+                            <input type="text" id="btParams" placeholder='{"fast_period":10}'>
+                        </div>
+                    </div>
+                    <button class="btn-primary" onclick="runStrategyBacktest()">运行回测</button>
+                    <div class="settings-hint" id="btHint"></div>
+                </div>
             </div>
         </div>
 
@@ -1276,6 +1428,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=5"></script>
+    <script src="script.js?v=12"></script>
 </body>
 </html>
