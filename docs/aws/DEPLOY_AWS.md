@@ -40,6 +40,16 @@ EOF'
 sudo chmod 600 /etc/oos.env
 ```
 
+### OpenBB 说明
+
+项目读取美股/加密货币数据时会优先走 OpenBB（Python package 或 OpenBB HTTP Server）。在服务器上推荐使用 OpenBB HTTP Server，并在 `/etc/oos.env` 中配置：
+
+```
+OPENBB_API_BASE_URL=http://127.0.0.1:6900
+```
+
+若没有单独部署 OpenBB Server，也可以不设置该变量，系统会回退到 yfinance 等数据源（功能受限但可运行）。
+
 ### 5) 启动（最简单）
 
 ```bash

@@ -7,3 +7,16 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - PORT=3000
+      - OPENBB_API_BASE_URL=${OPENBB_API_BASE_URL:-http://127.0.0.1:6900}
+      - FUTU_PY_HOME=/data/futu_runtime
+    volumes:
+      - openbb_platform:/root/.openbb_platform
+      - openbb_user_data:/root/OpenBBUserData
+      - results:/app/results
+      - futu_runtime:/data/futu_runtime
+
+volumes:
+  openbb_platform:
+  openbb_user_data:
+  results:
+  futu_runtime:
