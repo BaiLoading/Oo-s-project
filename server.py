@@ -2554,6 +2554,21 @@ def ta_report():
             return jsonify({"error": "请提供股票代码"}), 400
         if not os.environ.get("OPENAI_API_KEY") and not oai_key:
             return jsonify({"error": "未配置 OPENAI_API_KEY"}), 400
+        if os.environ.get("OPENAI_API_KEY") and not oai_key:
+            ip = request.headers.get("X-Forwarded-For") or request.remote_addr or ""
+            ip = ip.split(",")[0].strip()
+            now = time.time()
+            lim = int(os.environ.get("TA_RATE_LIMIT_PER_MINUTE") or 30)
+            window = 60.0
+            if not hasattr(ta_report, "_rl"):
+                ta_report._rl = {}
+            rl = ta_report._rl
+            rec = rl.get(ip) or []
+            rec = [t for t in rec if now - t < window]
+            if len(rec) >= lim:
+                return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+            rec.append(now)
+            rl[ip] = rec
 
         venv_py = os.path.join(os.path.dirname(__file__), ".venv_tradingagents", "bin", "python")
         runner  = os.path.join(os.path.dirname(__file__), "tradingagents_runner.py")
