@@ -125,6 +125,8 @@ def main():
     base_config["backend_url"] = args.base_url
     base_config["deep_think_llm"] = args.deep_model
     base_config["quick_think_llm"] = args.quick_model
+    base_config["openai_temperature"] = 0
+    base_config["openai_seed"] = 42
     base_config["max_debate_rounds"] = int(args.max_debate_rounds)
     base_config["max_risk_discuss_rounds"] = int(args.max_risk_discuss_rounds)
     base_config["output_language"] = args.language

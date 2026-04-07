@@ -1184,8 +1184,50 @@ def get_stock_full():
 
 @app.route("/api/stock/data")
 def get_stock_data():
-    """兼容旧端点 → 重定向到 /api/stock/full"""
-    return get_stock_full()
+    stock_code = (request.args.get("code") or "").strip()
+    market = (request.args.get("market") or "").strip().lower()
+    try:
+        days = int(request.args.get("days", 365))
+    except Exception:
+        days = 365
+    days = max(5, min(days, 3650))
+
+    if not stock_code:
+        return jsonify({"success": False, "error": "请提供股票代码"}), 400
+
+    if not market:
+        market = "cn" if (stock_code.isdigit() and len(stock_code) == 6) else "us"
+
+    if market == "cn" and stock_code.isdigit() and len(stock_code) == 6:
+        try:
+            ak = get_complete_akshare_data(stock_code, days=days)
+            kline = (ak.get("data") or [])[-days:]
+            quote = {
+                "code": stock_code,
+                "name": ak.get("name") or stock_code,
+                "price": ak.get("price"),
+            }
+            return jsonify({
+                "success": True,
+                "quote": quote,
+                "data": kline,
+                "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+        except Exception as e:
+            return jsonify({"success": False, "error": f"A股数据获取失败: {e}"}), 502
+
+    if market in ["us", "hk", "crypto"] or not stock_code.isdigit():
+        quote, kline, err = _yf_quote_and_kline(stock_code, days=days)
+        if err or quote is None or kline is None:
+            return jsonify({"success": False, "error": err or "获取数据失败"}), 502
+        return jsonify({
+            "success": True,
+            "quote": quote,
+            "data": kline,
+            "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+    return jsonify({"success": False, "error": "仅支持A股6位代码或美股代码"}), 404
 
 
 # ============================================================
@@ -2377,9 +2419,100 @@ def ai_chat():
 # ============================================================
 # TradingAgents 研报
 # ============================================================
+def _md_extract_section(md_text, titles):
+    md_text = md_text or ""
+    lines = md_text.splitlines()
+    titles_norm = {t.strip().lower() for t in (titles or []) if t and str(t).strip()}
+    heading_idx = None
+    heading_level = None
+    heading_text = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s.startswith("#"):
+            continue
+        j = 0
+        while j < len(s) and s[j] == "#":
+            j += 1
+        if j < 2 or j > 4:
+            continue
+        title = s[j:].strip()
+        key = title.lower()
+        if key in titles_norm:
+            heading_idx = i
+            heading_level = j
+            heading_text = title
+            break
+    if heading_idx is None:
+        return None
+
+    end_idx = len(lines)
+    for k in range(heading_idx + 1, len(lines)):
+        s = lines[k].strip()
+        if not s.startswith("#"):
+            continue
+        j = 0
+        while j < len(s) and s[j] == "#":
+            j += 1
+        if j >= 2 and j <= heading_level:
+            end_idx = k
+            break
+
+    body = "\n".join(lines[heading_idx + 1:end_idx]).strip()
+    return {
+        "heading_idx": heading_idx,
+        "end_idx": end_idx,
+        "level": heading_level,
+        "heading": heading_text,
+        "body": body,
+    }
+
+def _md_replace_section(md_text, section, new_title, new_body):
+    md_text = md_text or ""
+    lines = md_text.splitlines()
+    h = int(section["level"])
+    heading_line = "#" * h + " " + (new_title or section.get("heading") or "").strip()
+    before = lines[:section["heading_idx"]]
+    after = lines[section["end_idx"]:]
+    mid = [heading_line]
+    if (new_body or "").strip():
+        mid += (new_body.strip().splitlines())
+    return "\n".join(before + mid + after).strip() + "\n"
+
+def _translate_trading_plan_md(report_markdown, language):
+    lang = (language or "").strip().lower()
+    if lang not in ["chinese", "zh", "zh-cn", "zh_cn", "cn"]:
+        return report_markdown
+
+    sec = _md_extract_section(report_markdown, ["Trading Plan", "交易计划"])
+    if not sec:
+        return report_markdown
+    body = sec.get("body") or ""
+    if not body:
+        return report_markdown
+
+    has_english = any(("A" <= ch <= "Z") or ("a" <= ch <= "z") for ch in body)
+    if not has_english:
+        return _md_replace_section(report_markdown, sec, "交易计划", body)
+
+    sys_p = "你是一位专业的金融分析师与交易员。你的任务是把交易计划翻译成中文。"
+    prompt = (
+        "请把下面这段 Trading Plan 翻译成中文，要求：\n"
+        "1) 保留 Markdown 结构（列表、表格、换行、编号）。\n"
+        "2) 数字、百分比、价格、股票代码/代号（如 AAPL、BTC-USD）保持不变。\n"
+        "3) 不要添加额外内容，不要解释，只翻译原文。\n\n"
+        f"{body}"
+    )
+    zh = call_qwen_api(prompt, system_prompt=sys_p)
+    if not zh:
+        return report_markdown
+
+    zh_body = str(zh).strip()
+    return _md_replace_section(report_markdown, sec, "交易计划", zh_body)
+
 @app.route("/api/ai/tradingagents/report", methods=["POST"])
 def ta_report():
     try:
+        t0 = time.time()
         data = request.json or {}
         symbol  = (data.get("symbol") or data.get("code") or "").strip().upper()
         tdate   = (data.get("date")   or "").strip()
@@ -2441,6 +2574,7 @@ def ta_report():
         except:
             payload = None
         if proc.returncode == 0 and payload and payload.get("ok"):
+            payload["elapsed_seconds"] = round(time.time() - t0, 2)
             _ta_cache_set(ck, payload)
             return jsonify({"success": True, "data": payload})
         if payload and payload.get("error"):

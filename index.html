@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>股票智能分析系统</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css?v=1">
+    <link rel="stylesheet" href="style.css?v=5">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -15,7 +15,6 @@
                 <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
                 <div class="sidebar-brand">
                     <div class="sidebar-title">股票智能分析</div>
-                    <div class="sidebar-subtitle">AkShare 数据源</div>
                 </div>
             </div>
             <nav class="sidebar-nav">
@@ -310,6 +309,7 @@
                         <div class="analysis-result-header">
                             <h3>报告内容</h3>
                             <div class="result-meta" id="taMeta"></div>
+                            <button class="btn-secondary" id="taDownloadBtn" onclick="downloadTradingAgentsReport()" disabled>下载报告</button>
                         </div>
                         <div class="analysis-content" id="taReportContent">请输入股票代码后生成报告。</div>
                     </div>
@@ -1276,6 +1276,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=1"></script>
+    <script src="script.js?v=5"></script>
 </body>
 </html>

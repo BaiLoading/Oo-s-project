@@ -16,6 +16,8 @@ def _get_base_url() -> str:
 
 def _infer_market(symbol: str) -> str:
     s = (symbol or "").strip().upper()
+    if s.isdigit() and len(s) == 6:
+        return "cn"
     if s.endswith(".HK"):
         return "hk"
     if "-" in s:
@@ -97,4 +99,3 @@ def get_indicators_local(symbol: str, indicator: str, curr_date: str, look_back_
     header = f"# Indicator `{ind}` for {symbol.upper()} up to {curr_date} (look_back_days={look_back_days})\n"
     header += "# Source: local /api/stock/data\n\n"
     return header + out_df.to_csv(index=False)
-

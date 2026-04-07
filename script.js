@@ -3514,6 +3514,147 @@ function formatMarkdownSafe(message) {
         .replace(/\*(.*?)\*/g, '<em>$1</em>');
 }
 
+let __ta_last_md = '';
+let __ta_last_symbol = '';
+let __ta_last_date = '';
+
+function downloadTradingAgentsReport() {
+    const md = (__ta_last_md || '').trim();
+    if (!md) return;
+    const symbol = (__ta_last_symbol || 'report').replace(/[^A-Za-z0-9._-]/g, '_');
+    const date = (__ta_last_date || '').replace(/[^0-9-]/g, '');
+    const fileName = `TA_${symbol}${date ? '_' + date : ''}.md`;
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function translateTradingPlanToChinese(md, language) {
+    if ((language || '').toLowerCase() !== 'chinese') return md;
+    let s = md || '';
+    s = s.replace(/###\s*Trading Plan\b/gi, '### 交易计划');
+    s = s.replace(/##\s*Trading Plan\b/gi, '## 交易计划');
+    s = s.replace(/#\s*Trading Plan\b/gi, '# 交易计划');
+
+    const heading = /^(#{2,3})\s*(交易计划|Trading Plan)\s*$/gmi;
+    const match = heading.exec(s);
+    if (!match) return s;
+
+    const startIdx = match.index + match[0].length;
+    const rest = s.slice(startIdx);
+    const nextHeading = rest.search(/^\s*#{2,3}\s+/m);
+    const blockEnd = nextHeading >= 0 ? startIdx + nextHeading : s.length;
+    const before = s.slice(0, startIdx);
+    let block = s.slice(startIdx, blockEnd);
+    const after = s.slice(blockEnd);
+
+    const pairs = [
+        ['Entry', '入场'],
+        ['Entry Price', '入场价'],
+        ['Take Profit', '止盈'],
+        ['Stop Loss', '止损'],
+        ['Position Size', '仓位'],
+        ['Time Horizon', '持有周期'],
+        ['Risk Management', '风险管理'],
+        ['Catalyst', '催化剂'],
+        ['Invalidation', '失效条件'],
+        ['Target', '目标'],
+        ['Scenario', '情景'],
+        ['Bullish', '看多'],
+        ['Bearish', '看空'],
+        ['Neutral', '中性'],
+        ['Buy', '买入'],
+        ['Sell', '卖出'],
+        ['Hold', '持有'],
+        ['Watch', '观望'],
+    ];
+    for (const [en, zh] of pairs) {
+        const re = new RegExp(`\\b${en.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`, 'g');
+        block = block.replace(re, zh);
+    }
+
+    return `${before}${block}${after}`;
+}
+
+function renderTradingAgentsReport(raw) {
+    const text = (raw || '').trim();
+    if (!text) return '<div style="color:#8892b0;">暂无报告内容</div>';
+
+    const lines = text.split(/\r?\n/);
+    const sections = [];
+    let current = { title: '报告', level: 2, body: [] };
+
+    const pushCurrent = () => {
+        const bodyText = (current.body || []).join('\n').trim();
+        if (!bodyText) return;
+        sections.push({ title: current.title || '报告', level: current.level || 2, body: bodyText });
+    };
+
+    for (const line of lines) {
+        const m = line.match(/^(#{1,3})\s+(.*)$/);
+        if (m) {
+            pushCurrent();
+            current = { title: (m[2] || '').trim(), level: m[1].length, body: [] };
+        } else {
+            current.body.push(line);
+        }
+    }
+    pushCurrent();
+
+    const htmlParts = [];
+    for (const sec of sections) {
+        const title = escapeHtml((sec.title || '').trim() || '报告');
+        const bodyHtml = formatTradingAgentsBody(sec.body || '');
+        if (!bodyHtml) continue;
+        htmlParts.push(`
+            <section class="ta-section">
+                <div class="ta-section-title">${title}</div>
+                <div class="ta-section-body">${bodyHtml}</div>
+            </section>
+        `);
+    }
+    return htmlParts.join('') || '<div class="ta-empty">暂无报告内容</div>';
+}
+
+function formatTradingAgentsBody(text) {
+    let s = escapeHtml((text || '').trim());
+    if (!s) return '';
+
+    s = s.replace(/^\s*-\s+/gm, '• ');
+    s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+    const badge = (word, cls) => `<span class="ta-badge ${cls}">${word}</span>`;
+    s = s
+        .replace(/买入/g, badge('买入', 'ta-badge-buy'))
+        .replace(/加仓/g, badge('加仓', 'ta-badge-buy'))
+        .replace(/卖出/g, badge('卖出', 'ta-badge-sell'))
+        .replace(/减仓/g, badge('减仓', 'ta-badge-sell'))
+        .replace(/止损/g, badge('止损', 'ta-badge-risk'))
+        .replace(/止盈/g, badge('止盈', 'ta-badge-risk'))
+        .replace(/持有/g, badge('持有', 'ta-badge-hold'))
+        .replace(/观望/g, badge('观望', 'ta-badge-watch'));
+
+    const metricWords = [
+        'PE', 'P/E', '市盈率', 'ROE', 'PB', '市净率', 'EPS', 'EV/EBITDA', '毛利率', '净利率',
+        '目标价', '支撑位', '压力位', '成交量', '换手率', 'Beta', '股息率'
+    ];
+    for (const w of metricWords) {
+        const re = new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        s = s.replace(re, `<span class="ta-metric">${w}</span>`);
+    }
+
+    s = s.replace(/\b(\d+(\.\d+)?%?)\b/g, '<span class="ta-num">$1</span>');
+    s = s.replace(/\n/g, '<br>');
+    return s;
+}
+
 // 交易日记标签页切换
 function switchDiaryTab(tab) {
     const tabs = document.querySelectorAll('.diary-tab');
@@ -3834,6 +3975,7 @@ function appNavigate(view) {
     if (view === 'aiReport') {
         const el = document.getElementById('aiReportSection');
         if (el) el.classList.remove('hidden');
+        if (searchSection) searchSection.classList.add('hidden');
         const dateInput = document.getElementById('taDate');
         if (dateInput && !dateInput.value) {
             const d = new Date();
@@ -4318,6 +4460,8 @@ async function generateTradingAgentsReport() {
     if (hint) hint.textContent = '生成中...';
     if (meta) meta.textContent = '';
     if (content) content.textContent = '正在生成报告，请稍候...';
+    const dl = document.getElementById('taDownloadBtn');
+    if (dl) dl.disabled = true;
     
     try {
         const response = await apiFetch('/api/ai/tradingagents/report', {
@@ -4352,12 +4496,20 @@ async function generateTradingAgentsReport() {
         const payload = result.data;
         const md = payload.report_markdown || '';
         const decision = payload.decision ? `\n\n### 信号摘要\n${payload.decision}` : '';
-        if (meta) meta.textContent = `${payload.symbol || symbol} · ${payload.trade_date || date || ''} · 数据源: ${payload.data_vendor || '--'}`;
-        if (content) content.innerHTML = formatMarkdownSafe(`${md}${decision}`.trim() || '暂无报告内容');
+        const elapsed = payload.elapsed_seconds != null ? ` · 耗时: ${payload.elapsed_seconds}s` : '';
+        const cached = result.cached ? ' · 缓存' : '';
+        if (meta) meta.textContent = `${payload.symbol || symbol} · ${payload.trade_date || date || ''} · 数据源: ${payload.data_vendor || '--'}${elapsed}${cached}`;
+        const merged = `${md}${decision}`.trim();
+        __ta_last_md = merged;
+        __ta_last_symbol = payload.symbol || symbol;
+        __ta_last_date = payload.trade_date || date || '';
+        if (content) content.innerHTML = renderTradingAgentsReport(merged || '暂无报告内容');
+        if (dl) dl.disabled = !__ta_last_md;
         if (hint) hint.textContent = '生成完成';
     } catch (e) {
         if (hint) hint.textContent = `生成失败：${e && e.message ? e.message : '未知错误'}`;
         if (content) content.textContent = '生成失败，请检查后端配置与网络情况。';
+        if (dl) dl.disabled = true;
     }
 }
 
