@@ -2613,9 +2613,46 @@ def ta_health():
 # ============================================================
 # 投资策略
 # ============================================================
+def _use_dynamodb_strategy():
+    v = (os.environ.get("USE_DYNAMODB_STRATEGY") or "").strip().lower()
+    return v in ["1", "true", "yes", "on"]
+
+def _get_strategy_table():
+    if not _use_dynamodb_strategy():
+        return None
+    try:
+        from dynamodb_config import get_table
+        return get_table()
+    except Exception as e:
+        print(f"[!] DynamoDB strategy disabled: {e}")
+        return None
+
 @app.route("/api/strategy", methods=["GET"])
 def get_strategies():
-    return jsonify({"success": True, "data": load_strategies().get("strategies", [])})
+    table = _get_strategy_table()
+    if not table:
+        return jsonify({"success": True, "data": load_strategies().get("strategies", []), "storage": "json"})
+    try:
+        resp = table.scan()
+        items = resp.get("Items", []) or []
+        out = []
+        for it in items:
+            sid = it.get("strategy_id") or it.get("id")
+            try:
+                sid_int = int(it.get("id") or sid)
+            except Exception:
+                sid_int = int(time.time() * 1000)
+            out.append({
+                "id": sid_int,
+                "title": it.get("title") or it.get("strategy_name") or "",
+                "content": it.get("content") or it.get("strategy_content") or "",
+                "tags": it.get("tags") or it.get("strategy_tags") or [],
+                "created_at": it.get("created_at") or it.get("createdAt") or datetime.now().isoformat(),
+            })
+        out.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        return jsonify({"success": True, "data": out, "storage": "dynamodb"})
+    except Exception as e:
+        return jsonify({"success": True, "data": load_strategies().get("strategies", []), "storage": "json", "warning": f"dynamodb scan failed: {e}"})
 
 @app.route("/api/strategy", methods=["POST"])
 def add_strategy():
@@ -2626,23 +2663,41 @@ def add_strategy():
         tags    = d.get("tags", [])
         if not title or not content:
             return jsonify({"error": "标题和内容不能为空"}), 400
+        table = _get_strategy_table()
+        if table:
+            sid = int(time.time() * 1000)
+            item = {
+                "strategy_id": str(sid),
+                "id": sid,
+                "title": title,
+                "content": content,
+                "tags": tags or [],
+                "created_at": datetime.now().isoformat(),
+            }
+            table.put_item(Item=item)
+            return jsonify({"success": True, "data": {"id": sid, "title": title, "content": content, "tags": tags or [], "created_at": item["created_at"]}, "storage": "dynamodb"})
+
         strat = load_strategies()
         new_s = {"id": len(strat["strategies"]) + 1, "title": title,
                  "content": content, "tags": tags,
                  "created_at": datetime.now().isoformat()}
         strat["strategies"].append(new_s)
         save_strategies(strat)
-        return jsonify({"success": True, "data": new_s})
+        return jsonify({"success": True, "data": new_s, "storage": "json"})
     except Exception as e:
         return jsonify({"error": f"添加策略失败: {e}"}), 500
 
 @app.route("/api/strategy/<int:sid>", methods=["DELETE"])
 def del_strategy(sid):
     try:
+        table = _get_strategy_table()
+        if table:
+            table.delete_item(Key={"strategy_id": str(sid)})
+            return jsonify({"success": True, "storage": "dynamodb"})
         strat = load_strategies()
         strat["strategies"] = [s for s in strat.get("strategies", []) if s.get("id") != sid]
         save_strategies(strat)
-        return jsonify({"success": True})
+        return jsonify({"success": True, "storage": "json"})
     except Exception as e:
         return jsonify({"error": f"删除策略失败: {e}"}), 500
 
