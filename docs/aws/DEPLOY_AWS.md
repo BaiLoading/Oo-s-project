@@ -1,5 +1,14 @@
 ## AWS 部署（EC2 / Ubuntu 示例）
 
+## Elastic Beanstalk（Docker Compose）
+
+如果使用 EB 的 Docker Compose 平台，首次部署需要在实例上执行 `docker compose build`，依赖下载可能超过默认命令超时，导致部署被 EB 中止（TimedOut/Aborted）。
+
+本项目已提供：
+
+- [.ebextensions/01_command_timeout.config](file:///Users/irene/Documents/GitHub/Oo-s-project/.ebextensions/01_command_timeout.config) 将 EB 命令超时提升到 60 分钟
+- [.dockerignore](file:///Users/irene/Documents/GitHub/Oo-s-project/.dockerignore) 缩小 build context，避免传输过大
+
 ### 1) 上传与解压
 
 将 zip 上传到服务器（例如 /opt/oos），然后：
