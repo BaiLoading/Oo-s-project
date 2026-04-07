@@ -97,6 +97,7 @@ function joinUrl(base, path) {
     if (!b) return p;
     if (!p) return b;
     if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    if (b.endsWith('/api') && p.startsWith('/api/')) return `${b}${p.slice(4)}`;
     if (p.startsWith('/')) return `${b}${p}`;
     return `${b}/${p}`;
 }
@@ -104,6 +105,49 @@ function joinUrl(base, path) {
 function apiFetch(path, options) {
     const baseUrl = normalizeBaseUrl(appSettings.apiBaseUrl);
     return fetch(joinUrl(baseUrl, path), options);
+}
+
+async function readJsonOrThrow(resp) {
+    try {
+        return await resp.json();
+    } catch (e) {
+        const txt = await resp.text().catch(() => '');
+        const head = (txt || '').slice(0, 160).replace(/\s+/g, ' ').trim();
+        const url = resp && resp.url ? resp.url : '';
+        throw new Error(`返回非JSON（${resp.status}）：${head || 'empty body'}${url ? ` · ${url}` : ''}`);
+    }
+}
+
+function showPaperBackendError(message) {
+    const m = message || '请求失败';
+    const hint = `<p style="color:#ff4757;text-align:center;padding:18px 12px;line-height:1.6;">
+        ${escapeHtml(m)}<br>
+        请确认：<br>
+        1) 后端已启动（python server.py，默认端口 3000）<br>
+        2) 你是通过 http://127.0.0.1:3000 打开的页面（不是 Live Server/文件预览）<br>
+        3) 设置里的 API Base URL 留空或为 http://127.0.0.1:3000（不要以 /api 结尾）
+    </p>`;
+    const ranking = document.getElementById('stockRanking');
+    const orders = document.getElementById('ordersList');
+    const pos = document.getElementById('holdingsList');
+    const trades = document.getElementById('historyList');
+    if (ranking) ranking.innerHTML = hint;
+    if (orders) orders.innerHTML = hint;
+    if (pos) pos.innerHTML = hint;
+    if (trades) trades.innerHTML = hint;
+}
+
+async function paperBackendHealthCheck() {
+    try {
+        const resp = await apiFetch('/api/health');
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error((data && data.error) || `health failed(${resp.status})`);
+        return true;
+    } catch (e) {
+        stopPaperPolling();
+        showPaperBackendError(e && e.message ? e.message : '后端不可用');
+        return false;
+    }
 }
 
 const __rawFetch = window.fetch.bind(window);
@@ -1691,11 +1735,7 @@ async function updatePositionPrices() {
 }
 
 async function renderPortfolio() {
-    await updatePositionPrices();
-    renderHoldings();
-    renderHistory();
-    renderStrategies();
-    renderSummary();
+    switchPortfolioTab('sim');
 }
 
 function renderHoldings() {
@@ -2052,7 +2092,8 @@ function switchTab(tab) {
     } else {
         tabs[6].classList.add('active');
         portfolioSection.classList.remove('hidden');
-        renderPortfolio();
+        if (searchSection) searchSection.classList.add('hidden');
+        switchPortfolioTab('sim');
     }
 }
 
@@ -2591,14 +2632,18 @@ function renderDiaries() {
 
 async function loadStockRanking() {
     try {
-        const response = await fetch('/api/stock/ranking');
-        const result = await response.json();
+        const response = await apiFetch('/api/paper/ranking');
+        const result = await readJsonOrThrow(response);
         
         if (result.success && result.data) {
             renderStockRanking(result.data);
         }
     } catch (error) {
         console.error('加载股票榜单失败:', error);
+        const container = document.getElementById('stockRanking');
+        if (container) {
+            container.innerHTML = `<p style="color: #ff4757; text-align: center; padding: 60px 20px;">${escapeHtml(error && error.message ? error.message : '加载失败')}</p>`;
+        }
     }
 }
 
@@ -2611,14 +2656,14 @@ function renderStockRanking(stocks) {
         return `
             <div class="stock-ranking-item">
                 <div class="stock-info">
-                    <span class="stock-name">${stock.name}</span>
-                    <span class="stock-code">${stock.code}</span>
+                    <span class="stock-name">${stock.symbol}</span>
+                    <span class="stock-code">${stock.symbol}</span>
                 </div>
                 <div class="stock-price">
-                    <span class="price">¥${stock.price.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                    <span class="change ${changeClass}">${stock.changePercent >= 0 ? '+' : ''}${stock.changePercent.toFixed(2)}%</span>
+                    <span class="price">$${Number(stock.price || 0).toFixed(2)}</span>
+                    <span class="change ${changeClass}">${stock.changePercent >= 0 ? '+' : ''}${Number(stock.changePercent || 0).toFixed(2)}%</span>
                 </div>
-                <button class="btn-primary btn-small" onclick="openTradeModal('${stock.code}', '${stock.name}', ${stock.price})">交易</button>
+                <button class="btn-primary btn-small" onclick="openTradeModal('${stock.symbol}', '${stock.symbol}', ${Number(stock.price || 0)})">交易</button>
             </div>
         `;
     }).join('');
@@ -2628,20 +2673,317 @@ function switchPortfolioTab(tab) {
     const tabs = document.querySelectorAll('.portfolio-tab');
     tabs.forEach(t => t.classList.remove('active'));
     
-    const tradingTab = document.getElementById('tradingTab');
+    const simTab = document.getElementById('simTab');
+    const liveTab = document.getElementById('liveTab');
     const pkTab = document.getElementById('pkTab');
     
-    tradingTab.classList.add('hidden');
+    if (simTab) simTab.classList.add('hidden');
+    if (liveTab) liveTab.classList.add('hidden');
     pkTab.classList.add('hidden');
     
-    if (tab === 'trading') {
+    if (tab === 'sim') {
         tabs[0].classList.add('active');
-        tradingTab.classList.remove('hidden');
-        loadStockRanking();
-        checkCapitalSet();
-    } else {
+        if (simTab) simTab.classList.remove('hidden');
+        paperBackendHealthCheck().then(ok => {
+            if (!ok) return;
+            loadStockRanking();
+            checkCapitalSet();
+            startPaperPolling();
+            refreshPaperTradingUI();
+        });
+    } else if (tab === 'live') {
         tabs[1].classList.add('active');
+        if (liveTab) liveTab.classList.remove('hidden');
+        stopPaperPolling();
+        futuInitLiveTab();
+    } else {
+        tabs[2].classList.add('active');
         pkTab.classList.remove('hidden');
+        stopPaperPolling();
+    }
+}
+
+async function futuInitLiveTab() {
+    const statusEl = document.getElementById('futuStatus');
+    if (statusEl) statusEl.textContent = '检查后端...';
+    try {
+        const health = await apiFetch('/api/health');
+        const ok = await readJsonOrThrow(health);
+        if (!health.ok || !ok.success) throw new Error(ok.error || 'health failed');
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `后端不可用：${e && e.message ? e.message : '未知错误'}`;
+        return;
+    }
+    futuRefreshStatus();
+    futuRefreshAccounts();
+    futuRefreshStrategies();
+    futuRefreshLogs();
+}
+
+async function futuRefreshStatus() {
+    const statusEl = document.getElementById('futuStatus');
+    try {
+        const resp = await apiFetch('/api/futu/status');
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'status failed');
+        const s = data.data || {};
+        statusEl.textContent = s.connected ? `已连接 OpenD：${s.host}:${s.port}` : `未连接 OpenD：${s.last_error || ''}`;
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `状态获取失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuConnect() {
+    const host = (document.getElementById('futuHost') && document.getElementById('futuHost').value || '').trim();
+    const port = Number(document.getElementById('futuPort') && document.getElementById('futuPort').value || 11111);
+    const statusEl = document.getElementById('futuStatus');
+    if (statusEl) statusEl.textContent = '连接中...';
+    try {
+        const resp = await apiFetch('/api/futu/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ host, port })
+        });
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'connect failed');
+        await futuRefreshStatus();
+        await futuRefreshAccounts();
+        await futuRefreshStrategies();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `连接失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuUnlock() {
+    const env = (document.getElementById('futuEnv') && document.getElementById('futuEnv').value || 'SIMULATE').trim();
+    const pwd = (document.getElementById('futuUnlockPwd') && document.getElementById('futuUnlockPwd').value || '').trim();
+    const statusEl = document.getElementById('futuStatus');
+    if (statusEl) statusEl.textContent = '解锁中...';
+    try {
+        const resp = await apiFetch('/api/futu/unlock', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ env, password: pwd })
+        });
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'unlock failed');
+        if (statusEl) statusEl.textContent = '解锁成功';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `解锁失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuRefreshAccounts() {
+    const env = (document.getElementById('futuEnv') && document.getElementById('futuEnv').value || 'SIMULATE').trim();
+    const sel = document.getElementById('futuAccount');
+    if (!sel) return;
+    sel.innerHTML = '';
+    try {
+        const resp = await apiFetch(`/api/futu/accounts?env=${encodeURIComponent(env)}`);
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'accounts failed');
+        const items = data.data || [];
+        if (!items.length) {
+            sel.innerHTML = '<option value="">无账户</option>';
+            return;
+        }
+        sel.innerHTML = items.map(a => `<option value="${escapeHtml(a.acc_id)}">${escapeHtml(a.acc_id)} · ${escapeHtml(a.trd_market || '')} · ${escapeHtml(a.trd_env || '')}</option>`).join('');
+        sel.value = String(items[0].acc_id || '');
+    } catch (e) {
+        sel.innerHTML = '<option value="">加载失败</option>';
+    }
+}
+
+async function futuRunOnce() {
+    const env = (document.getElementById('futuEnv') && document.getElementById('futuEnv').value || 'SIMULATE').trim();
+    const accId = (document.getElementById('futuAccount') && document.getElementById('futuAccount').value || '').trim();
+    const strategyId = Number(document.getElementById('futuStrategyId') && document.getElementById('futuStrategyId').value || 0);
+    const symbolsRaw = (document.getElementById('futuSymbols') && document.getElementById('futuSymbols').value || '').trim();
+    const klineType = (document.getElementById('futuKlineType') && document.getElementById('futuKlineType').value || 'K_5M').trim();
+    const qty = Number(document.getElementById('futuQty') && document.getElementById('futuQty').value || 1);
+    const statusEl = document.getElementById('futuStatus');
+    if (!accId || !strategyId || !symbolsRaw) {
+        if (statusEl) statusEl.textContent = '请填写账户、策略ID、标的';
+        return;
+    }
+    const symbols = symbolsRaw.replace('，', ',').replace('；', ',').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    if (statusEl) statusEl.textContent = '运行中...';
+    try {
+        const resp = await apiFetch('/api/futu/strategy/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ env, acc_id: accId, strategy_id: strategyId, symbols, quantity: qty, kline_type: klineType })
+        });
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'run failed');
+        if (statusEl) statusEl.textContent = `完成：${(data.data.actions || []).length} 笔动作`;
+        await futuRefreshLogs();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `运行失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuBotStart() {
+    const env = (document.getElementById('futuEnv') && document.getElementById('futuEnv').value || 'SIMULATE').trim();
+    let accId = (document.getElementById('futuAccount') && document.getElementById('futuAccount').value || '').trim();
+    accId = accId.replace(/\D/g, '');
+    const strategyId = Number(document.getElementById('futuStrategyId') && document.getElementById('futuStrategyId').value || 0);
+    const symbolsRaw = (document.getElementById('futuSymbols') && document.getElementById('futuSymbols').value || '').trim();
+    const klineType = (document.getElementById('futuKlineType') && document.getElementById('futuKlineType').value || 'K_5M').trim();
+    const intervalSec = Number(document.getElementById('futuIntervalSec') && document.getElementById('futuIntervalSec').value || 30);
+    const qty = Number(document.getElementById('futuQty') && document.getElementById('futuQty').value || 1);
+    const statusEl = document.getElementById('futuStatus');
+    if (!accId || !strategyId || !symbolsRaw) {
+        if (statusEl) statusEl.textContent = '请填写账户、策略ID、标的';
+        return;
+    }
+    const symbols = symbolsRaw.replace('，', ',').replace('；', ',').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    if (statusEl) statusEl.textContent = '启动监控中...';
+    try {
+        const resp = await apiFetch('/api/futu/bot/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                env,
+                acc_id: accId,
+                strategy_id: strategyId,
+                symbols,
+                quantity: qty,
+                kline_type: klineType,
+                interval_seconds: intervalSec
+            })
+        });
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'start failed');
+        if (statusEl) statusEl.textContent = '监控已启动（后台自动运行，无需再点运行一次）';
+        await futuRefreshLogs();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `启动失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuBotStop() {
+    const statusEl = document.getElementById('futuStatus');
+    if (statusEl) statusEl.textContent = '停止中...';
+    try {
+        const resp = await apiFetch('/api/futu/bot/stop', { method: 'POST' });
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'stop failed');
+        if (statusEl) statusEl.textContent = '监控已停止';
+        await futuRefreshLogs();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `停止失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuDemoBuy() {
+    let accId = (document.getElementById('futuAccount') && document.getElementById('futuAccount').value || '').trim();
+    accId = accId.replace(/\D/g, '');
+    const symbolsRaw = (document.getElementById('futuSymbols') && document.getElementById('futuSymbols').value || '').trim();
+    const qty = Number(document.getElementById('futuQty') && document.getElementById('futuQty').value || 1);
+    const statusEl = document.getElementById('futuStatus');
+    if (!accId || !symbolsRaw) {
+        if (statusEl) statusEl.textContent = '请先选择账户并填写标的';
+        return;
+    }
+    const first = symbolsRaw.replace('，', ',').replace('；', ',').split(',').map(s => s.trim().toUpperCase()).filter(Boolean)[0];
+    if (!first) {
+        if (statusEl) statusEl.textContent = '请填写标的';
+        return;
+    }
+    try {
+        const sel = document.getElementById('futuAccount');
+        const isHk = first.startsWith('HK.') || (first.replace(/\D/g, '').length === 5);
+        const isUs = first.startsWith('US.') || (!first.includes('.') && !first.match(/^\d+$/));
+        if (sel && sel.options && sel.options.length) {
+            const curText = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '';
+            if (isHk && curText.includes('· US ·')) {
+                for (let i = 0; i < sel.options.length; i++) {
+                    if ((sel.options[i].textContent || '').includes('· HK ·')) {
+                        sel.selectedIndex = i;
+                        accId = (sel.value || '').replace(/\D/g, '');
+                        break;
+                    }
+                }
+            }
+            if (isUs && curText.includes('· HK ·')) {
+                for (let i = 0; i < sel.options.length; i++) {
+                    if ((sel.options[i].textContent || '').includes('· US ·')) {
+                        sel.selectedIndex = i;
+                        accId = (sel.value || '').replace(/\D/g, '');
+                        break;
+                    }
+                }
+            }
+        }
+    } catch {}
+    if (statusEl) statusEl.textContent = '测试下单中（SIM）...';
+    try {
+        const resp = await apiFetch('/api/futu/demo/buy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ acc_id: accId, symbol: first, quantity: qty })
+        });
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'demo buy failed');
+        if (statusEl) statusEl.textContent = `已提交模拟买单：${data.data.symbol} order=${data.data.order_id}`;
+        await futuRefreshLogs();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `测试下单失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuRefreshStrategies() {
+    const sel = document.getElementById('futuStrategySelect');
+    const idInput = document.getElementById('futuStrategyId');
+    if (!sel || !idInput) return;
+    sel.innerHTML = '<option value="">加载策略中...</option>';
+    try {
+        const resp = await apiFetch('/api/strategy-library?page=1&pageSize=100&builtin=1');
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || '策略加载失败');
+        const items = data.items || [];
+        if (!items.length) {
+            sel.innerHTML = '<option value="">无策略</option>';
+            return;
+        }
+        sel.innerHTML = items.map(s => `<option value="${escapeHtml(String(s.id))}">#${escapeHtml(String(s.id))} · ${escapeHtml(s.name || '')}${s.is_builtin ? '（内置）' : ''}</option>`).join('');
+        if (!idInput.value) {
+            idInput.value = String(items[0].id);
+        }
+        sel.value = idInput.value ? String(idInput.value) : String(items[0].id);
+        sel.onchange = () => {
+            idInput.value = sel.value;
+        };
+    } catch (e) {
+        sel.innerHTML = `<option value="">加载失败</option>`;
+        const statusEl = document.getElementById('futuStatus');
+        if (statusEl) statusEl.textContent = `策略加载失败：${e && e.message ? e.message : '未知错误'}`;
+    }
+}
+
+async function futuRefreshLogs() {
+    const el = document.getElementById('futuLogs');
+    if (!el) return;
+    try {
+        const resp = await apiFetch('/api/futu/logs?limit=80');
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || 'logs failed');
+        const items = data.data || [];
+        if (!items.length) {
+            el.innerHTML = '<div style="color:#8892b0;">暂无日志</div>';
+            return;
+        }
+        el.innerHTML = items.map(x => {
+            const t = (x.created_at || '').replace('T', ' ').slice(0, 19);
+            const dp = (x.desired_position != null) ? Number(x.desired_position) : null;
+            const cp = (x.current_position != null) ? Number(x.current_position) : null;
+            const posText = (dp != null && cp != null) ? ` · desired=${dp} · current=${cp}` : '';
+            const oid = x.order_id ? ` · order=${escapeHtml(String(x.order_id))}` : '';
+            return `<div style="margin-bottom:6px;"><span class="ta-num">${escapeHtml(t)}</span> · ${escapeHtml(x.env)} · ${escapeHtml(x.symbol)} · ${escapeHtml(x.action)} · ${escapeHtml(x.status)}${posText}${oid}${x.message ? ' · ' + escapeHtml(x.message) : ''}</div>`;
+        }).join('');
+    } catch (e) {
+        el.innerHTML = `<div style="color:#ff4757;">${escapeHtml(e && e.message ? e.message : '加载失败')}</div>`;
     }
 }
 
@@ -2651,25 +2993,23 @@ function setInitialCapital() {
         alert('请输入有效的初始资金');
         return;
     }
-    
-    simInitialCapital = capital;
-    simAvailableCapital = capital;
-    simHoldings = [];
-    simTradeHistory = [];
-    
-    localStorage.setItem('simCapitalSet', 'true');
-    
-    updateCapitalDisplay();
-    renderSimHoldings();
-    renderSimTradeHistory();
-    saveSimData();
-    
-    const capitalSetup = document.getElementById('capitalSetup');
-    if (capitalSetup) {
-        capitalSetup.classList.add('hidden');
-    }
-    
-    alert('初始资金设置成功！');
+
+    apiFetch('/api/paper/account/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initial_cash: capital })
+    }).then(r => r.json()).then(res => {
+        if (!res.success) throw new Error(res.error || '设置失败');
+        localStorage.setItem('simCapitalSet', 'true');
+        const capitalSetup = document.getElementById('capitalSetup');
+        if (capitalSetup) {
+            capitalSetup.classList.add('hidden');
+        }
+        refreshPaperTradingUI();
+        alert('初始资金设置成功！');
+    }).catch(e => {
+        alert(e && e.message ? e.message : '设置失败');
+    });
 }
 
 function checkCapitalSet() {
@@ -2681,30 +3021,7 @@ function checkCapitalSet() {
 }
 
 function updateCapitalDisplay() {
-    const availableEl = document.getElementById('availableCapital');
-    const holdingValueEl = document.getElementById('holdingMarketValue');
-    const totalEl = document.getElementById('totalAssets');
-    const returnEl = document.getElementById('totalReturn');
-    
-    if (!availableEl || !holdingValueEl || !totalEl || !returnEl) {
-        return;
-    }
-    
-    let holdingMarketValue = 0;
-    simHoldings.forEach(h => {
-        holdingMarketValue += h.quantity * h.currentPrice;
-    });
-    
-    const totalAssets = simAvailableCapital + holdingMarketValue;
-    const totalReturn = ((totalAssets - simInitialCapital) / simInitialCapital * 100);
-    
-    availableEl.textContent = `¥${simAvailableCapital.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-    holdingValueEl.textContent = `¥${holdingMarketValue.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-    totalEl.textContent = `¥${totalAssets.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-    
-    const returnClass = totalReturn >= 0 ? 'positive' : 'negative';
-    returnEl.textContent = `${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%`;
-    returnEl.className = `value ${returnClass}`;
+    return;
 }
 
 function openTradeModal(code, name, price) {
@@ -2714,10 +3031,10 @@ function openTradeModal(code, name, price) {
     document.getElementById('tradeModalTitle').textContent = `交易 - ${name}`;
     document.getElementById('tradeStockName').textContent = name;
     document.getElementById('tradeStockCode').textContent = code;
-    document.getElementById('tradeCurrentPrice').textContent = `¥${price.toFixed(2)}`;
+    document.getElementById('tradeCurrentPrice').textContent = `$${Number(price || 0).toFixed(2)}`;
     document.getElementById('tradePrice').value = price.toFixed(2);
     document.getElementById('tradeQuantity').value = '';
-    document.getElementById('tradeEstimatedAmount').textContent = '¥0.00';
+    document.getElementById('tradeEstimatedAmount').textContent = '$0.00';
     
     const tradeTabs = document.querySelectorAll('.trade-tab');
     tradeTabs.forEach(t => t.classList.remove('active'));
@@ -2750,7 +3067,7 @@ function updateTradeEstimate() {
     const amount = price * quantity;
     
     document.getElementById('tradeEstimatedAmount').textContent = 
-        `¥${amount.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        `$${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
 }
 
 document.addEventListener('input', function(e) {
@@ -2767,161 +3084,213 @@ function executeTrade() {
         alert('请输入有效的价格和数量');
         return;
     }
-    
-    const amount = price * quantity;
-    
-    if (currentTradeType === 'buy') {
-        if (amount > simAvailableCapital) {
-            alert('可用资金不足');
-            return;
-        }
-        
-        simAvailableCapital -= amount;
-        
-        const existingHolding = simHoldings.find(h => h.code === currentTradeStock.code);
-        if (existingHolding) {
-            const totalQuantity = existingHolding.quantity + quantity;
-            const totalCost = existingHolding.quantity * existingHolding.buyPrice + quantity * price;
-            existingHolding.quantity = totalQuantity;
-            existingHolding.buyPrice = totalCost / totalQuantity;
-            existingHolding.currentPrice = price;
-        } else {
-            simHoldings.push({
-                code: currentTradeStock.code,
-                name: currentTradeStock.name,
-                quantity: quantity,
-                buyPrice: price,
-                currentPrice: price
-            });
-        }
-        
-        simTradeHistory.unshift({
-            id: Date.now(),
-            date: new Date().toISOString().split('T')[0],
-            type: 'buy',
-            code: currentTradeStock.code,
-            name: currentTradeStock.name,
-            quantity: quantity,
-            price: price
-        });
-        
-    } else {
-        const holding = simHoldings.find(h => h.code === currentTradeStock.code);
-        if (!holding) {
-            alert('没有该股票持仓');
-            return;
-        }
-        
-        if (quantity > holding.quantity) {
-            alert('持仓数量不足');
-            return;
-        }
-        
-        simAvailableCapital += amount;
-        
-        if (quantity === holding.quantity) {
-            simHoldings = simHoldings.filter(h => h.code !== currentTradeStock.code);
-        } else {
-            holding.quantity -= quantity;
-        }
-        
-        simTradeHistory.unshift({
-            id: Date.now(),
-            date: new Date().toISOString().split('T')[0],
-            type: 'sell',
-            code: currentTradeStock.code,
-            name: currentTradeStock.name,
-            quantity: quantity,
-            price: price
-        });
-    }
-    
-    updateCapitalDisplay();
-    renderSimHoldings();
-    renderSimTradeHistory();
-    saveSimData();
-    closeTradeModal();
-    
-    alert(`${currentTradeType === 'buy' ? '买入' : '卖出'}成功！`);
+    apiFetch('/api/paper/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            symbol: currentTradeStock.code,
+            side: currentTradeType,
+            price,
+            quantity
+        })
+    }).then(r => r.json().then(j => ({ ok: r.ok, j }))).then(({ ok, j }) => {
+        if (!ok || !j.success) throw new Error(j.error || '下单失败');
+        closeTradeModal();
+        refreshPaperTradingUI();
+        alert('订单已提交，等待价格触发成交。');
+    }).catch(e => {
+        alert(e && e.message ? e.message : '下单失败');
+    });
 }
 
 function renderSimHoldings() {
     const container = document.getElementById('holdingsList');
     if (!container) return;
-    
-    if (simHoldings.length === 0) {
-        container.innerHTML = '<p style="color: #8892b0; text-align: center; padding: 30px;">暂无持仓</p>';
-        return;
-    }
-    
-    let html = '';
-    simHoldings.forEach(h => {
-        const pnl = (h.currentPrice - h.buyPrice) * h.quantity;
-        const pnlPercent = ((h.currentPrice - h.buyPrice) / h.buyPrice * 100);
-        const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-        
-        html += `
-            <div class="holding-item">
-                <div class="holding-header">
-                    <div class="holding-info">
-                        <span class="holding-name">${h.name}</span>
-                        <span class="holding-code">${h.code}</span>
-                    </div>
-                    <div class="holding-pnl ${pnlClass}">
-                        ${pnl >= 0 ? '+' : ''}¥${pnl.toFixed(2)}
-                    </div>
-                </div>
-                <div class="holding-details">
-                    <div class="holding-detail-item">
-                        <span class="label">持仓数量</span>
-                        <span class="value">${h.quantity}股</span>
-                    </div>
-                    <div class="holding-detail-item">
-                        <span class="label">买入价格</span>
-                        <span class="value">¥${h.buyPrice.toFixed(2)}</span>
-                    </div>
-                    <div class="holding-detail-item">
-                        <span class="label">当前价格</span>
-                        <span class="value">¥${h.currentPrice.toFixed(2)}</span>
-                    </div>
-                    <div class="holding-detail-item">
-                        <span class="label">收益率</span>
-                        <span class="value ${pnlClass}">${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</span>
-                    </div>
-                </div>
-                <button class="btn-secondary btn-small" onclick="openTradeModal('${h.code}', '${h.name}', ${h.currentPrice})">交易</button>
-            </div>
-        `;
-    });
-    
-    container.innerHTML = html;
+    container.innerHTML = '<p style="color: #8892b0; text-align: center; padding: 30px;">加载中...</p>';
 }
 
 function renderSimTradeHistory() {
     const container = document.getElementById('historyList');
     if (!container) return;
-    
-    if (simTradeHistory.length === 0) {
-        container.innerHTML = '<p style="color: #8892b0; text-align: center; padding: 30px;">暂无交易记录</p>';
-        return;
+    container.innerHTML = '<p style="color: #8892b0; text-align: center; padding: 30px;">加载中...</p>';
+}
+
+let __paper_poll_timer = null;
+
+function startPaperPolling() {
+    if (__paper_poll_timer) return;
+    __paper_poll_timer = setInterval(() => {
+        paperPoll();
+    }, 8000);
+}
+
+function stopPaperPolling() {
+    if (__paper_poll_timer) {
+        clearInterval(__paper_poll_timer);
+        __paper_poll_timer = null;
     }
-    
-    let html = '';
-    simTradeHistory.forEach(t => {
-        html += `
-            <div class="history-item">
-                <div class="history-date">${t.date}</div>
-                <div class="history-content">
-                    <div class="history-type ${t.type}">${t.type === 'buy' ? '买入' : '卖出'}</div>
-                    <div class="history-stock">${t.name} (${t.code})</div>
-                    <div class="history-quantity">${t.quantity}股</div>
-                    <div class="history-price">¥${t.price.toFixed(2)}</div>
+}
+
+async function paperPoll() {
+    try {
+        const resp = await apiFetch('/api/paper/poll', { method: 'POST' });
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) return;
+        refreshPaperTradingUIFromPoll(data.data);
+    } catch {}
+}
+
+async function refreshPaperTradingUI() {
+    await paperPoll();
+    await Promise.all([
+        loadPaperOrders(),
+        loadPaperPositions(),
+        loadPaperTrades()
+    ]);
+}
+
+function refreshPaperTradingUIFromPoll(data) {
+    const s = data && data.summary ? data.summary : null;
+    if (!s) return;
+    const availableEl = document.getElementById('availableCapital');
+    const holdingValueEl = document.getElementById('holdingMarketValue');
+    const totalEl = document.getElementById('totalAssets');
+    const returnEl = document.getElementById('totalReturn');
+    if (availableEl) availableEl.textContent = `$${Number(s.cash || 0).toFixed(2)}`;
+    if (holdingValueEl) holdingValueEl.textContent = `$${Number(s.market_value || 0).toFixed(2)}`;
+    if (totalEl) totalEl.textContent = `$${Number(s.equity || 0).toFixed(2)}`;
+    if (returnEl) {
+        const r = Number(s.total_return || 0) * 100;
+        const cls = r >= 0 ? 'positive' : 'negative';
+        returnEl.textContent = `${r >= 0 ? '+' : ''}${r.toFixed(2)}%`;
+        returnEl.className = `value ${cls}`;
+    }
+}
+
+async function loadPaperOrders() {
+    const container = document.getElementById('ordersList');
+    if (!container) return;
+    try {
+        const resp = await apiFetch('/api/paper/orders');
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || '加载失败');
+        const items = data.data || [];
+        if (!items.length) {
+            container.innerHTML = '<p style="color: #8892b0; text-align: center; padding: 30px;">暂无挂单</p>';
+            return;
+        }
+        container.innerHTML = items.map(o => {
+            const st = o.status;
+            const side = o.side === 'buy' ? '买入' : '卖出';
+            const canCancel = st === 'pending';
+            const filled = st === 'filled' ? ` 成交价 $${Number(o.filled_price || 0).toFixed(2)}` : '';
+            return `
+                <div class="history-item">
+                    <div class="history-date">#${o.id}</div>
+                    <div class="history-content">
+                        <div class="history-type ${o.side}">${side}</div>
+                        <div class="history-stock">${escapeHtml(o.symbol || '')}</div>
+                        <div class="history-quantity">${Number(o.quantity || 0)}股</div>
+                        <div class="history-price">$${Number(o.limit_price || 0).toFixed(2)}</div>
+                        <div class="history-price">${escapeHtml(st)}${filled}</div>
+                        ${canCancel ? `<button class="btn-secondary btn-small" onclick="cancelPaperOrder(${o.id})">撤单</button>` : ''}
+                    </div>
                 </div>
-            </div>
-        `;
-    });
-    
-    container.innerHTML = html;
+            `;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<p style="color:#ff4757;text-align:center;padding:30px;">${escapeHtml(e.message || '加载失败')}</p>`;
+    }
+}
+
+async function cancelPaperOrder(id) {
+    try {
+        const resp = await apiFetch(`/api/paper/orders/${id}/cancel`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) throw new Error(data.error || '撤单失败');
+        refreshPaperTradingUI();
+    } catch (e) {
+        alert(e && e.message ? e.message : '撤单失败');
+    }
+}
+
+async function loadPaperPositions() {
+    const container = document.getElementById('holdingsList');
+    if (!container) return;
+    try {
+        const resp = await apiFetch('/api/paper/positions');
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || '加载失败');
+        const items = data.data || [];
+        if (!items.length) {
+            container.innerHTML = '<p style="color: #8892b0; text-align: center; padding: 30px;">暂无持仓</p>';
+            return;
+        }
+        container.innerHTML = items.map(p => {
+            const pnl = Number(p.unrealized_pnl || 0);
+            const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+            const avg = Number(p.avg_cost || 0);
+            const last = Number(p.last_price || 0);
+            const qty = Number(p.quantity || 0);
+            const pct = avg ? ((last - avg) / avg * 100) : 0;
+            return `
+                <div class="holding-item">
+                    <div class="holding-header">
+                        <div class="holding-info">
+                            <span class="holding-name">${escapeHtml(p.symbol || '')}</span>
+                            <span class="holding-code">${escapeHtml(p.symbol || '')}</span>
+                        </div>
+                        <div class="holding-pnl ${pnlClass}">
+                            ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}
+                        </div>
+                    </div>
+                    <div class="holding-details">
+                        <div class="holding-detail-item"><span class="label">数量</span><span class="value">${qty}股</span></div>
+                        <div class="holding-detail-item"><span class="label">成本价</span><span class="value">$${avg.toFixed(2)}</span></div>
+                        <div class="holding-detail-item"><span class="label">现价</span><span class="value">$${last.toFixed(2)}</span></div>
+                        <div class="holding-detail-item"><span class="label">收益率</span><span class="value ${pnlClass}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</span></div>
+                    </div>
+                    <button class="btn-secondary btn-small" onclick="openTradeModal('${escapeHtml(p.symbol || '')}', '${escapeHtml(p.symbol || '')}', ${last})">交易</button>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<p style="color:#ff4757;text-align:center;padding:30px;">${escapeHtml(e.message || '加载失败')}</p>`;
+    }
+}
+
+async function loadPaperTrades() {
+    const container = document.getElementById('historyList');
+    if (!container) return;
+    try {
+        const resp = await apiFetch('/api/paper/trades?limit=50');
+        const data = await readJsonOrThrow(resp);
+        if (!resp.ok || !data.success) throw new Error(data.error || '加载失败');
+        const items = data.data || [];
+        if (!items.length) {
+            container.innerHTML = '<p style="color: #8892b0; text-align: center; padding: 30px;">暂无交易记录</p>';
+            return;
+        }
+        container.innerHTML = items.map(t => {
+            const side = t.side === 'buy' ? '买入' : '卖出';
+            const pnl = Number(t.pnl || 0);
+            const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+            return `
+                <div class="history-item">
+                    <div class="history-date">${escapeHtml((t.created_at || '').slice(0, 10))}</div>
+                    <div class="history-content">
+                        <div class="history-type ${t.side}">${side}</div>
+                        <div class="history-stock">${escapeHtml(t.symbol || '')}</div>
+                        <div class="history-quantity">${Number(t.quantity || 0)}股</div>
+                        <div class="history-price">$${Number(t.price || 0).toFixed(2)}</div>
+                        <div class="history-price ${pnlClass}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<p style="color:#ff4757;text-align:center;padding:30px;">${escapeHtml(e.message || '加载失败')}</p>`;
+    }
 }
 
 function setUsername() {
@@ -4359,7 +4728,7 @@ function renderStrategyList(items, total, page, pageSize) {
             const isActive = strategySelectedId === it.id;
             listEl.innerHTML += `
                 <div class="strategy-list-item ${isActive ? 'active' : ''}" onclick="selectStrategy(${it.id})">
-                    <div class="strategy-list-title">${escapeHtml(it.name || '')}</div>
+                    <div class="strategy-list-title">#${escapeHtml(String(it.id))} · ${escapeHtml(it.name || '')}</div>
                     <div class="strategy-list-desc">${escapeHtml((it.description || '').slice(0, 80))}</div>
                     <div class="strategy-list-meta">
                         ${it.type ? `<span class="strategy-tag">${escapeHtml(it.type)}</span>` : ''}
@@ -4424,7 +4793,7 @@ function renderStrategyDetail(s) {
     const isBuiltin = !!s.is_builtin;
 
     detailEl.innerHTML = `
-        <div class="strategy-detail-title">${escapeHtml(s.name || '')}</div>
+        <div class="strategy-detail-title">#${escapeHtml(String(s.id))} · ${escapeHtml(s.name || '')}</div>
         <div class="strategy-detail-desc">${escapeHtml(s.description || '')}</div>
         <div class="strategy-list-meta">${s.type ? `<span class="strategy-tag">${escapeHtml(s.type)}</span>` : ''}${isBuiltin ? `<span class="strategy-tag">内置</span>` : `<span class="strategy-tag">自定义</span>`}${tagHtml}</div>
         <div class="strategy-factors">${factorHtml}</div>

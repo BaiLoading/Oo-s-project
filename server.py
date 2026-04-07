@@ -18,7 +18,7 @@ if sys.platform == 'win32':
 
 from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
-import random, re, json, os, time, hashlib, subprocess, tempfile
+import random, re, json, os, time, hashlib, subprocess, tempfile, threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -38,6 +38,30 @@ def _ob_call(fn, timeout=10):
 # ============================================================
 app = Flask(__name__)
 CORS(app)
+
+@app.errorhandler(404)
+def api_not_found(e):
+    if request.path.startswith("/api/"):
+        return jsonify({
+            "success": False,
+            "error": "Not Found",
+            "path": request.path,
+            "method": request.method,
+        }), 404
+    return e
+
+
+@app.errorhandler(405)
+def api_method_not_allowed(e):
+    if request.path.startswith("/api/"):
+        return jsonify({
+            "success": False,
+            "error": "Method Not Allowed",
+            "path": request.path,
+            "method": request.method,
+            "allowed": sorted(list(getattr(e, "valid_methods", []) or [])),
+        }), 405
+    return e
 
 # ============================================================
 # 配置加载
@@ -2862,6 +2886,609 @@ def _fetch_ohlcv_openbb_yf(symbol, start_date, end_date):
         last_err = str(e)
 
     raise RuntimeError(last_err or "empty data")
+
+
+def _fetch_us_quotes(symbols):
+    import pandas as pd
+    import yfinance as yf
+
+    syms = []
+    for s in (symbols or []):
+        t = (s or "").strip().upper()
+        if not t:
+            continue
+        if t.isdigit():
+            continue
+        if t.endswith(".SS") or t.endswith(".SZ") or t.endswith(".HK"):
+            continue
+        if t not in syms:
+            syms.append(t)
+    if not syms:
+        return {}
+
+    data = {}
+    try:
+        df = yf.download(
+            tickers=" ".join(syms),
+            period="5d",
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="ticker",
+            threads=False,
+        )
+        if df is not None and not df.empty:
+            for sym in syms:
+                sub = None
+                try:
+                    if isinstance(df.columns, pd.MultiIndex):
+                        if sym in df.columns.get_level_values(0):
+                            sub = df[sym]
+                    else:
+                        sub = df
+                except Exception:
+                    sub = None
+                if sub is None or sub.empty:
+                    continue
+                sub = sub.dropna()
+                if len(sub) < 1:
+                    continue
+                close = float(sub["Close"].iloc[-1])
+                prev = float(sub["Close"].iloc[-2]) if len(sub) >= 2 else close
+                vol = float(sub["Volume"].iloc[-1]) if "Volume" in sub.columns else 0.0
+                chg = (close / prev - 1.0) if prev else 0.0
+                data[sym] = {"symbol": sym, "price": close, "changePercent": chg * 100, "volume": vol}
+    except Exception:
+        data = {}
+
+    return data
+
+
+@app.route("/api/paper/account", methods=["GET"])
+def paper_account():
+    from paper_store import ensure_account, get_account
+    user_id = "default_user"
+    ensure_account(user_id, initial_cash=100000)
+    acc = get_account(user_id)
+    return jsonify({"success": True, "data": acc})
+
+
+@app.route("/api/paper/account/reset", methods=["POST"])
+def paper_account_reset():
+    from paper_store import reset_account
+    user_id = "default_user"
+    d = request.json or {}
+    cash = float(d.get("initial_cash") or 100000)
+    cash = max(1000.0, min(cash, 100000000.0))
+    reset_account(user_id, cash)
+    return jsonify({"success": True})
+
+
+@app.route("/api/paper/ranking", methods=["GET"])
+def paper_ranking():
+    symbols = [
+        "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "NFLX", "AMD", "INTC",
+        "JPM", "BAC", "XOM", "CVX", "KO", "PEP", "DIS", "WMT", "COST", "AVGO",
+    ]
+    quotes = _fetch_us_quotes(symbols)
+    out = []
+    for s in symbols:
+        q = quotes.get(s)
+        if not q:
+            continue
+        out.append(q)
+    return jsonify({"success": True, "data": out})
+
+
+@app.route("/api/paper/orders", methods=["GET"])
+def paper_orders_list():
+    from paper_store import ensure_account, list_orders
+    user_id = "default_user"
+    ensure_account(user_id, initial_cash=100000)
+    status = (request.args.get("status") or "").strip().lower()
+    items = list_orders(user_id, status=status)
+    return jsonify({"success": True, "data": items})
+
+
+@app.route("/api/paper/orders", methods=["POST"])
+def paper_orders_create():
+    from paper_store import ensure_account, create_order
+    user_id = "default_user"
+    ensure_account(user_id, initial_cash=100000)
+    d = request.json or {}
+    symbol = (d.get("symbol") or "").strip().upper()
+    side = (d.get("side") or "").strip().lower()
+    limit_price = float(d.get("price") or 0)
+    quantity = float(d.get("quantity") or 0)
+    if not symbol or symbol.isdigit() or symbol.endswith(".SS") or symbol.endswith(".SZ") or symbol.endswith(".HK"):
+        return jsonify({"error": "仅支持美股代码（例如 AAPL）"}), 400
+    if side not in ["buy", "sell"]:
+        return jsonify({"error": "side 必须为 buy/sell"}), 400
+    if limit_price <= 0 or quantity <= 0:
+        return jsonify({"error": "price/quantity 必须大于 0"}), 400
+    try:
+        oid = create_order(user_id, symbol, side, limit_price, quantity)
+        return jsonify({"success": True, "data": {"id": oid}})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/paper/orders/<int:oid>/cancel", methods=["POST"])
+def paper_orders_cancel(oid):
+    from paper_store import cancel_order
+    user_id = "default_user"
+    ok = cancel_order(user_id, oid)
+    if not ok:
+        return jsonify({"error": "不可取消（可能不存在或非pending）"}), 400
+    return jsonify({"success": True})
+
+
+@app.route("/api/paper/positions", methods=["GET"])
+def paper_positions():
+    from paper_store import ensure_account, list_positions
+    user_id = "default_user"
+    ensure_account(user_id, initial_cash=100000)
+    items = list_positions(user_id)
+    return jsonify({"success": True, "data": items})
+
+
+@app.route("/api/paper/trades", methods=["GET"])
+def paper_trades():
+    from paper_store import ensure_account, list_trades
+    user_id = "default_user"
+    ensure_account(user_id, initial_cash=100000)
+    limit = int(request.args.get("limit", 50))
+    limit = max(1, min(limit, 200))
+    items = list_trades(user_id, limit=limit)
+    return jsonify({"success": True, "data": items})
+
+
+@app.route("/api/paper/poll", methods=["POST"])
+def paper_poll():
+    from paper_store import ensure_account, list_orders, list_positions, fill_orders, update_positions_prices, get_account
+    user_id = "default_user"
+    ensure_account(user_id, initial_cash=100000)
+
+    pending = list_orders(user_id, status="pending")
+    pos = list_positions(user_id)
+    symbols = list({o["symbol"] for o in pending} | {p["symbol"] for p in pos})
+    quotes = _fetch_us_quotes(symbols)
+
+    filled = fill_orders(user_id, quotes)
+    update_positions_prices(user_id, quotes)
+
+    acc = get_account(user_id) or {}
+    pos2 = list_positions(user_id)
+    market_value = 0.0
+    unreal = 0.0
+    for p in pos2:
+        market_value += float(p.get("last_price") or 0) * float(p.get("quantity") or 0)
+        unreal += float(p.get("unrealized_pnl") or 0)
+    cash = float(acc.get("cash") or 0)
+    equity = cash + market_value
+    initial = float(acc.get("initial_cash") or 0)
+    total_return = (equity / initial - 1.0) if initial else 0.0
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "account": acc,
+            "summary": {
+                "cash": cash,
+                "market_value": market_value,
+                "equity": equity,
+                "unrealized_pnl": unreal,
+                "total_return": total_return,
+            },
+            "filled": filled,
+            "quotes": quotes,
+        }
+    })
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify({
+        "success": True,
+        "service": "stock-intelligence-platform",
+        "time": datetime.now().isoformat(),
+    })
+
+
+@app.route("/api/futu/status", methods=["GET"])
+def futu_status():
+    try:
+        from futu_client import get_futu_client
+        c = get_futu_client()
+        return jsonify({"success": True, "data": c.status()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/futu/connect", methods=["POST"])
+def futu_connect():
+    try:
+        from futu_client import get_futu_client
+        d = request.json or {}
+        host = d.get("host") or "127.0.0.1"
+        port = d.get("port") or 11111
+        c = get_futu_client()
+        info = c.connect(host, port)
+        return jsonify({"success": True, "data": info})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/futu/unlock", methods=["POST"])
+def futu_unlock():
+    try:
+        from futu_client import get_futu_client
+        d = request.json or {}
+        env = (d.get("env") or "SIMULATE").upper()
+        pwd = d.get("password") or ""
+        c = get_futu_client()
+        c.unlock_trade(pwd, env)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/futu/accounts", methods=["GET"])
+def futu_accounts():
+    try:
+        from futu_client import get_futu_client
+        env = (request.args.get("env") or "SIMULATE").upper()
+        c = get_futu_client()
+        items = c.acc_list(env)
+        return jsonify({"success": True, "data": items})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/futu/quotes", methods=["GET"])
+def futu_quotes():
+    try:
+        from futu_client import get_futu_client
+        symbols = (request.args.get("symbols") or "").replace("，", ",").replace("；", ",")
+        items = [x.strip().upper() for x in symbols.split(",") if x.strip()]
+        c = get_futu_client()
+        data = c.quote_price(items)
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/futu/positions", methods=["GET"])
+def futu_positions():
+    try:
+        from futu_client import get_futu_client
+        env = (request.args.get("env") or "SIMULATE").upper()
+        acc_id = (request.args.get("acc_id") or "").strip()
+        if not acc_id:
+            return jsonify({"success": False, "error": "missing acc_id"}), 400
+        c = get_futu_client()
+        accounts = c.acc_list(env)
+        if not any(str(a.get("acc_id")) == str(acc_id) for a in accounts):
+            return jsonify({
+                "success": False,
+                "error": f"Nonexisting acc_id {acc_id}. 请先从 /api/futu/accounts?env={env} 选择有效账户",
+                "data": {"available_accounts": accounts}
+            }), 400
+        data = c.positions(env, acc_id)
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/futu/strategy/run", methods=["POST"])
+def futu_strategy_run_once():
+    try:
+        from futu_client import get_futu_client
+        from futu_store import add_log
+        from strategy_store import get_strategy
+        import pandas as pd
+        d = request.json or {}
+        env = (d.get("env") or "SIMULATE").upper()
+        acc_id = (d.get("acc_id") or "").strip()
+        acc_id = "".join(ch for ch in acc_id if ch.isdigit())
+        strategy_id = int(d.get("strategy_id") or 0)
+        symbols_raw = d.get("symbols") or []
+        symbols = [str(x).strip().upper() for x in (symbols_raw or []) if str(x).strip()]
+        qty = float(d.get("quantity") or 1)
+        kline_type = (d.get("kline_type") or "K_5M").strip().upper()
+        if not acc_id or not strategy_id or not symbols:
+            return jsonify({"success": False, "error": "missing acc_id/strategy_id/symbols"}), 400
+
+        s = get_strategy(strategy_id)
+        if not s:
+            return jsonify({"success": False, "error": "策略不存在"}), 404
+
+        c = get_futu_client()
+        accounts = c.acc_list(env)
+        if not any(str(a.get("acc_id")) == str(acc_id) for a in accounts):
+            return jsonify({
+                "success": False,
+                "error": f"Nonexisting acc_id {acc_id}. 请在下拉框选择有效账户（env={env}）",
+                "data": {"available_accounts": accounts}
+            }), 400
+        norm_symbols = [c.normalize_symbol(x) for x in symbols]
+        quotes = c.quote_price(norm_symbols)
+        positions = {p["symbol"]: p for p in c.positions(env, acc_id)}
+        actions = []
+
+        for sym, norm in zip(symbols, norm_symbols):
+            max_count = 260
+            if kline_type in ["K_1M", "K_3M", "K_5M", "K_15M", "K_30M", "K_60M"]:
+                max_count = 600 if kline_type == "K_1M" else 400
+            k = c.history_kline(norm, count=max_count, kline_type=kline_type)
+            if len(k) < 40:
+                add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "skip", 0, 0, "", "skipped", "kline不足")
+                continue
+            df = pd.DataFrame(k)
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna(subset=["date"]).sort_values("date").set_index("date")
+            df.columns = [x.lower() for x in df.columns]
+            payload = {"code": s.get("code") or "", "params": s.get("params") or {}, "data_path": None}
+            with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as f:
+                data_path = f.name
+                df.reset_index().rename(columns={"date": "date"}).to_csv(f, index=False)
+            try:
+                payload = {"code": s.get("code") or "", "params": s.get("params") or {}, "data_path": data_path}
+                runner = os.path.join(os.path.dirname(__file__), "strategy_sandbox_runner.py")
+                proc = subprocess.run(
+                    [sys.executable, runner],
+                    input=json.dumps(payload, ensure_ascii=False),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    cwd=os.path.dirname(__file__),
+                )
+                out = (proc.stdout or "").strip()
+                if proc.returncode != 0:
+                    add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "error", 0, 0, "", "error", (proc.stderr or out or "sandbox failed")[:2000])
+                    continue
+                resp = json.loads(out) if out else {}
+                if not resp.get("ok"):
+                    add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "error", 0, 0, "", "error", str(resp.get("error") or "sandbox error")[:2000])
+                    continue
+                pos_arr = resp.get("positions") or []
+                last_signal = pos_arr[-2] if len(pos_arr) >= 2 else (pos_arr[-1] if pos_arr else 0)
+                desired = 1.0 if last_signal > 0.5 else 0.0
+            finally:
+                try:
+                    os.remove(data_path)
+                except Exception:
+                    pass
+
+            cur_qty = float((positions.get(norm) or {}).get("qty") or 0.0)
+            mkt = float((quotes.get(norm) or {}).get("price") or 0.0)
+            if mkt <= 0:
+                add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "skip", desired, cur_qty, "", "skipped", "无行情")
+                continue
+
+            if desired > 0.5 and cur_qty <= 1e-9:
+                r = c.place_order(env, acc_id, norm, "buy", qty, mkt)
+                add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "buy", desired, cur_qty, r.get("order_id"), "sent", f"limit={mkt} kline={kline_type}")
+                actions.append({"symbol": norm, "action": "buy", "order_id": r.get("order_id")})
+            elif desired <= 0.5 and cur_qty > 1e-9:
+                r = c.place_order(env, acc_id, norm, "sell", min(qty, cur_qty), mkt)
+                add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "sell", desired, cur_qty, r.get("order_id"), "sent", f"limit={mkt} kline={kline_type}")
+                actions.append({"symbol": norm, "action": "sell", "order_id": r.get("order_id")})
+            else:
+                add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "hold", desired, cur_qty, "", "noop", f"desired={desired} cur_qty={cur_qty}")
+
+        return jsonify({"success": True, "data": {"actions": actions}})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/futu/demo/buy", methods=["POST"])
+def futu_demo_buy():
+    try:
+        from futu_client import get_futu_client
+        from futu_store import add_log
+        d = request.json or {}
+        acc_id = (d.get("acc_id") or "").strip()
+        acc_id = "".join(ch for ch in acc_id if ch.isdigit())
+        symbol = (d.get("symbol") or "").strip().upper()
+        qty = float(d.get("quantity") or 1)
+        if not acc_id or not symbol:
+            return jsonify({"success": False, "error": "missing acc_id/symbol"}), 400
+        c = get_futu_client()
+        env = "SIMULATE"
+        accounts = c.acc_list(env)
+        if not any(str(a.get("acc_id")) == str(acc_id) for a in accounts):
+            return jsonify({"success": False, "error": f"Nonexisting acc_id {acc_id}", "data": {"available_accounts": accounts}}), 400
+        norm = c.normalize_symbol(symbol)
+        q = c.quote_price([norm]).get(norm) or {}
+        mkt = float(q.get("price") or 0.0)
+        if mkt <= 0:
+            return jsonify({"success": False, "error": "no quote price"}), 400
+        r = c.place_order(env, acc_id, norm, "buy", qty, mkt)
+        add_log("default_user", env, acc_id, 0, "DEMO_BUY", norm, "buy", 1.0, 0.0, r.get("order_id"), "sent", f"limit={mkt}")
+        return jsonify({"success": True, "data": {"symbol": norm, "order_id": r.get("order_id"), "price": mkt}})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+_futu_bot_lock = threading.Lock()
+_futu_bot_thread = None
+_futu_bot_stop = None
+_futu_bot_config = {}
+
+
+def _futu_bot_worker():
+    global _futu_bot_thread, _futu_bot_stop, _futu_bot_config
+    while True:
+        with _futu_bot_lock:
+            stop_ev = _futu_bot_stop
+            cfg = dict(_futu_bot_config)
+        if not stop_ev or stop_ev.is_set():
+            break
+        try:
+            from futu_client import get_futu_client
+            from futu_store import add_log
+            from strategy_store import get_strategy
+            import pandas as pd
+
+            env = (cfg.get("env") or "SIMULATE").upper()
+            if env != "SIMULATE":
+                add_log("default_user", env, cfg.get("acc_id", ""), int(cfg.get("strategy_id") or 0), "", "", "skip", 0, 0, "", "blocked", "bot 仅允许 SIMULATE")
+            else:
+                c = get_futu_client()
+                acc_id = str(cfg.get("acc_id") or "").strip()
+                strategy_id = int(cfg.get("strategy_id") or 0)
+                symbols = cfg.get("symbols") or []
+                qty = float(cfg.get("quantity") or 1)
+                kline_type = (cfg.get("kline_type") or "K_5M").strip().upper()
+
+                s = get_strategy(strategy_id)
+                if not s:
+                    add_log("default_user", env, acc_id, strategy_id, "", "", "error", 0, 0, "", "error", "策略不存在")
+                else:
+                    norm_symbols = [c.normalize_symbol(x) for x in symbols]
+                    quotes = c.quote_price(norm_symbols)
+                    positions = {p["symbol"]: p for p in c.positions(env, acc_id)}
+
+                    for norm in norm_symbols:
+                        max_count = 260
+                        if kline_type in ["K_1M", "K_3M", "K_5M", "K_15M", "K_30M", "K_60M"]:
+                            max_count = 600 if kline_type == "K_1M" else 400
+                        k = c.history_kline(norm, count=max_count, kline_type=kline_type)
+                        if len(k) < 40:
+                            add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "skip", 0, 0, "", "skipped", "kline不足")
+                            continue
+                        df = pd.DataFrame(k)
+                        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                        df = df.dropna(subset=["date"]).sort_values("date").set_index("date")
+                        df.columns = [x.lower() for x in df.columns]
+
+                        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as f:
+                            data_path = f.name
+                            df.reset_index().to_csv(f, index=False)
+                        try:
+                            payload = {"code": s.get("code") or "", "params": s.get("params") or {}, "data_path": data_path}
+                            runner = os.path.join(os.path.dirname(__file__), "strategy_sandbox_runner.py")
+                            proc = subprocess.run(
+                                [sys.executable, runner],
+                                input=json.dumps(payload, ensure_ascii=False),
+                                capture_output=True,
+                                text=True,
+                                encoding="utf-8",
+                                errors="replace",
+                                timeout=10,
+                                cwd=os.path.dirname(__file__),
+                            )
+                            out = (proc.stdout or "").strip()
+                            if proc.returncode != 0:
+                                add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "error", 0, 0, "", "error", (proc.stderr or out or "sandbox failed")[:2000])
+                                continue
+                            resp = json.loads(out) if out else {}
+                            if not resp.get("ok"):
+                                add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "error", 0, 0, "", "error", str(resp.get("error") or "sandbox error")[:2000])
+                                continue
+                            pos_arr = resp.get("positions") or []
+                            last_signal = pos_arr[-2] if len(pos_arr) >= 2 else (pos_arr[-1] if pos_arr else 0)
+                            desired = 1.0 if last_signal > 0.5 else 0.0
+                        finally:
+                            try:
+                                os.remove(data_path)
+                            except Exception:
+                                pass
+
+                        cur_qty = float((positions.get(norm) or {}).get("qty") or 0.0)
+                        mkt = float((quotes.get(norm) or {}).get("price") or 0.0)
+                        if mkt <= 0:
+                            add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "skip", desired, cur_qty, "", "skipped", "无行情")
+                            continue
+
+                        if desired > 0.5 and cur_qty <= 1e-9:
+                            r = c.place_order(env, acc_id, norm, "buy", qty, mkt)
+                            add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "buy", desired, cur_qty, r.get("order_id"), "sent", f"limit={mkt} kline={kline_type}")
+                        elif desired <= 0.5 and cur_qty > 1e-9:
+                            r = c.place_order(env, acc_id, norm, "sell", min(qty, cur_qty), mkt)
+                            add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "sell", desired, cur_qty, r.get("order_id"), "sent", f"limit={mkt} kline={kline_type}")
+                        else:
+                            add_log("default_user", env, acc_id, strategy_id, s.get("name"), norm, "hold", desired, cur_qty, "", "noop", f"desired={desired} cur_qty={cur_qty} kline={kline_type}")
+        except Exception as e:
+            try:
+                from futu_store import add_log
+                add_log("default_user", "SIMULATE", str(cfg.get("acc_id") or ""), int(cfg.get("strategy_id") or 0), "", "", "error", 0, 0, "", "error", str(e)[:2000])
+            except Exception:
+                pass
+        interval = float(cfg.get("interval_seconds") or 30)
+        interval = max(5.0, min(interval, 3600.0))
+        stop_ev.wait(interval)
+
+    with _futu_bot_lock:
+        _futu_bot_thread = None
+        _futu_bot_stop = None
+        _futu_bot_config = {}
+
+
+@app.route("/api/futu/bot/start", methods=["POST"])
+def futu_bot_start():
+    global _futu_bot_thread, _futu_bot_stop, _futu_bot_config
+    d = request.json or {}
+    env = (d.get("env") or "SIMULATE").upper()
+    if env != "SIMULATE":
+        return jsonify({"success": False, "error": "bot 仅允许 SIMULATE"}), 400
+    acc_id = (d.get("acc_id") or "").strip()
+    acc_id = "".join(ch for ch in acc_id if ch.isdigit())
+    strategy_id = int(d.get("strategy_id") or 0)
+    symbols = d.get("symbols") or []
+    symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+    if not acc_id or not strategy_id or not symbols:
+        return jsonify({"success": False, "error": "missing acc_id/strategy_id/symbols"}), 400
+    with _futu_bot_lock:
+        _futu_bot_config = {
+            "env": env,
+            "acc_id": acc_id,
+            "strategy_id": strategy_id,
+            "symbols": symbols,
+            "quantity": float(d.get("quantity") or 1),
+            "kline_type": (d.get("kline_type") or "K_5M").strip().upper(),
+            "interval_seconds": float(d.get("interval_seconds") or 30),
+        }
+        if _futu_bot_thread and _futu_bot_thread.is_alive():
+            return jsonify({"success": True, "data": {"running": True, "updated": True}})
+        _futu_bot_stop = threading.Event()
+        _futu_bot_thread = threading.Thread(target=_futu_bot_worker, daemon=True)
+        _futu_bot_thread.start()
+    return jsonify({"success": True, "data": {"running": True, "updated": False}})
+
+
+@app.route("/api/futu/bot/stop", methods=["POST"])
+def futu_bot_stop():
+    global _futu_bot_stop, _futu_bot_config
+    with _futu_bot_lock:
+        if _futu_bot_stop:
+            _futu_bot_stop.set()
+            _futu_bot_config = {}
+            return jsonify({"success": True})
+    return jsonify({"success": True})
+
+
+@app.route("/api/futu/bot/status", methods=["GET"])
+def futu_bot_status():
+    with _futu_bot_lock:
+        running = bool(_futu_bot_thread and _futu_bot_thread.is_alive())
+        cfg = dict(_futu_bot_config) if running else {}
+    return jsonify({"success": True, "data": {"running": running, "config": cfg}})
+
+
+@app.route("/api/futu/logs", methods=["GET"])
+def futu_logs():
+    try:
+        from futu_store import list_logs
+        limit = int(request.args.get("limit", 100))
+        limit = max(1, min(limit, 200))
+        data = list_logs("default_user", limit=limit)
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 def _run_backtest_sandbox(strategy_code, df, params):

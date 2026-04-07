@@ -7,3 +7,4 @@ numpy
 dashscope
 yfinance
 boto3
+futu-api

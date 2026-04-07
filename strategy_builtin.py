@@ -123,6 +123,29 @@ def _tmpl_volume_breakout(defaults):
         "    return positions\n"
     )
 
+def _tmpl_always_long():
+    return (
+        "import numpy as np\n"
+        "import pandas as pd\n"
+        "def strategy(df, params):\n"
+        "    positions = pd.Series(1.0, index=df.index)\n"
+        "    if len(positions) > 0:\n"
+        "        positions.iloc[0] = 0.0\n"
+        "    return positions\n"
+    )
+
+
+def _tmpl_onebar_momentum():
+    return (
+        "import numpy as np\n"
+        "import pandas as pd\n"
+        "def strategy(df, params):\n"
+        "    prev = df['close'].shift(1)\n"
+        "    positions = pd.Series(np.where(df['close'] > prev, 1.0, 0.0), index=df.index)\n"
+        "    positions = positions.fillna(0.0)\n"
+        "    return positions\n"
+    )
+
 
 def _tmpl_macd_trend(defaults):
     return (
@@ -245,6 +268,24 @@ def _make(name, description, code, params, tags, type_name):
 
 def builtin_strategies():
     out = []
+
+    out.append(_make(
+        "DEMO Always Long（测试）",
+        "测试用：始终保持多头（第一根为0），用于快速验证真实模拟盘下单链路。仅演示，不保证收益。",
+        _tmpl_always_long(),
+        {},
+        ["测试", "演示"],
+        "测试策略",
+    ))
+
+    out.append(_make(
+        "1-bar Momentum（分钟级更敏感）",
+        "短周期动量：当收盘价高于上一根K线收盘价则持有多头，否则空仓。更适合 1m/5m 产生频繁信号变化。仅演示，不保证收益。",
+        _tmpl_onebar_momentum(),
+        {},
+        ["动量", "短周期", "测试"],
+        "动量类",
+    ))
 
     out.append(_make(
         "EMA Crossover 双均线",

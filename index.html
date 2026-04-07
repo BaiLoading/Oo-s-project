@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>股票智能分析系统</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css?v=12">
+    <link rel="stylesheet" href="style.css?v=24">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -1086,11 +1086,15 @@
 
         <div id="portfolioSection" class="hidden">
             <div class="portfolio-tabs">
-                <button class="portfolio-tab active" onclick="switchPortfolioTab('trading')">📊 模拟交易</button>
+                <button class="portfolio-tab active" onclick="switchPortfolioTab('sim')">📊 模拟交易</button>
+                <button class="portfolio-tab" onclick="switchPortfolioTab('live')">🧾 真实模拟盘交易</button>
                 <button class="portfolio-tab" onclick="switchPortfolioTab('pk')">🏆 模拟PK</button>
             </div>
 
-            <div id="tradingTab" class="portfolio-tab-content">
+            <div id="simTab" class="portfolio-tab-content">
+                <div class="risk-warning" style="margin: 0 0 16px 0;">
+                    <p>⚠️ <strong>提示：</strong>当前仅支持美股模拟交易，所有资金以美元（USD）计价。</p>
+                </div>
                 <div class="capital-setting-section">
                     <div id="capitalSetup" class="capital-setup">
                         <h3>💰 模拟资金设置</h3>
@@ -1099,8 +1103,8 @@
                                 <div class="form-group">
                                     <label>初始资金</label>
                                     <div class="input-with-unit">
-                                        <input type="number" id="initialCapital" placeholder="输入初始资金" value="1000000">
-                                        <span class="unit">元</span>
+                                        <input type="number" id="initialCapital" placeholder="输入初始资金" value="100000">
+                                        <span class="unit">USD</span>
                                     </div>
                                 </div>
                             </div>
@@ -1110,15 +1114,15 @@
                     <div class="capital-display">
                         <div class="capital-item">
                             <span class="label">当前可用资金</span>
-                            <span class="value" id="availableCapital">¥1,000,000.00</span>
+                            <span class="value" id="availableCapital">$0.00</span>
                         </div>
                         <div class="capital-item">
                             <span class="label">持仓市值</span>
-                            <span class="value" id="holdingMarketValue">¥0.00</span>
+                            <span class="value" id="holdingMarketValue">$0.00</span>
                         </div>
                         <div class="capital-item">
                             <span class="label">总资产</span>
-                            <span class="value" id="totalAssets">¥1,000,000.00</span>
+                            <span class="value" id="totalAssets">$0.00</span>
                         </div>
                         <div class="capital-item">
                             <span class="label">总收益率</span>
@@ -1130,61 +1134,17 @@
                 <div class="stock-ranking-section">
                     <h3>📈 热门股票榜单</h3>
                     <div id="stockRanking" class="stock-ranking">
-                        <div class="stock-ranking-item">
-                            <div class="stock-info">
-                                <span class="stock-name">贵州茅台</span>
-                                <span class="stock-code">600519</span>
-                            </div>
-                            <div class="stock-price">
-                                <span class="price">¥1,732.50</span>
-                                <span class="change positive">+2.35%</span>
-                            </div>
-                            <button class="btn-primary btn-small" onclick="openTradeModal('600519', '贵州茅台', 1732.50)">交易</button>
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <p>正在加载榜单...</p>
                         </div>
-                        <div class="stock-ranking-item">
-                            <div class="stock-info">
-                                <span class="stock-name">宁德时代</span>
-                                <span class="stock-code">300750</span>
-                            </div>
-                            <div class="stock-price">
-                                <span class="price">¥249.41</span>
-                                <span class="change positive">+3.12%</span>
-                            </div>
-                            <button class="btn-primary btn-small" onclick="openTradeModal('300750', '宁德时代', 249.41)">交易</button>
-                        </div>
-                        <div class="stock-ranking-item">
-                            <div class="stock-info">
-                                <span class="stock-name">中国平安</span>
-                                <span class="stock-code">601318</span>
-                            </div>
-                            <div class="stock-price">
-                                <span class="price">¥45.80</span>
-                                <span class="change negative">-1.08%</span>
-                            </div>
-                            <button class="btn-primary btn-small" onclick="openTradeModal('601318', '中国平安', 45.80)">交易</button>
-                        </div>
-                        <div class="stock-ranking-item">
-                            <div class="stock-info">
-                                <span class="stock-name">招商银行</span>
-                                <span class="stock-code">600036</span>
-                            </div>
-                            <div class="stock-price">
-                                <span class="price">¥32.65</span>
-                                <span class="change positive">+0.85%</span>
-                            </div>
-                            <button class="btn-primary btn-small" onclick="openTradeModal('600036', '招商银行', 32.65)">交易</button>
-                        </div>
-                        <div class="stock-ranking-item">
-                            <div class="stock-info">
-                                <span class="stock-name">比亚迪</span>
-                                <span class="stock-code">002594</span>
-                            </div>
-                            <div class="stock-price">
-                                <span class="price">¥238.90</span>
-                                <span class="change positive">+1.56%</span>
-                            </div>
-                            <button class="btn-primary btn-small" onclick="openTradeModal('002594', '比亚迪', 238.90)">交易</button>
-                        </div>
+                    </div>
+                </div>
+
+                <div class="history-section">
+                    <h3>🧾 挂单（Orders）</h3>
+                    <div id="ordersList" class="history-list">
+                        <p style="color: #8892b0; text-align: center; padding: 30px;">暂无挂单</p>
                     </div>
                 </div>
 
@@ -1203,6 +1163,57 @@
                 </div>
             </div>
 
+            <div id="liveTab" class="portfolio-tab-content hidden">
+                <div class="analysis-panel full-width" style="margin-top: 16px;">
+                    <div class="analysis-header">
+                        <h2>🧾 真实模拟盘交易（Futu）</h2>
+                        <p class="analysis-subtitle">通过 OpenD 连接 Futu 账户，使用策略库策略自动下单（默认 SIMULATE）</p>
+                    </div>
+
+                    <div class="strategy-lib-toolbar">
+                        <div class="strategy-lib-actions">
+                            <input type="text" id="futuHost" class="strategy-lib-search" placeholder="OpenD Host" value="127.0.0.1">
+                            <input type="number" id="futuPort" class="strategy-lib-search" placeholder="OpenD Port" value="11111">
+                            <select id="futuEnv" class="strategy-lib-search">
+                                <option value="SIMULATE" selected>SIMULATE</option>
+                                <option value="REAL">REAL</option>
+                            </select>
+                            <button class="btn-secondary" onclick="futuConnect()">连接</button>
+                            <input type="password" id="futuUnlockPwd" class="strategy-lib-search" placeholder="交易解锁密码（不会存储）">
+                            <button class="btn-secondary" onclick="futuUnlock()">解锁</button>
+                        </div>
+                    </div>
+
+                    <div class="strategy-lib-toolbar">
+                        <div class="strategy-lib-actions">
+                            <select id="futuAccount" class="strategy-lib-search"></select>
+                            <select id="futuStrategySelect" class="strategy-lib-search"></select>
+                            <input type="number" id="futuStrategyId" class="strategy-lib-search" placeholder="策略ID（自动填充，可手动改）">
+                            <input type="text" id="futuSymbols" class="strategy-lib-search" placeholder="标的（AAPL,TSLA）">
+                            <select id="futuKlineType" class="strategy-lib-search">
+                                <option value="K_1M">K_1M</option>
+                                <option value="K_5M" selected>K_5M</option>
+                                <option value="K_15M">K_15M</option>
+                                <option value="K_DAY">K_DAY</option>
+                            </select>
+                            <input type="number" id="futuIntervalSec" class="strategy-lib-search" placeholder="轮询秒数" value="30">
+                            <input type="number" id="futuQty" class="strategy-lib-search" placeholder="每次下单股数" value="1">
+                            <button class="btn-primary" onclick="futuRunOnce()">运行一次</button>
+                            <button class="btn-primary" onclick="futuBotStart()">开始监控</button>
+                            <button class="btn-secondary" onclick="futuBotStop()">停止监控</button>
+                            <button class="btn-secondary" onclick="futuDemoBuy()">测试买入（SIM）</button>
+                            <button class="btn-secondary" onclick="futuRefreshLogs()">刷新日志</button>
+                        </div>
+                    </div>
+
+                    <div id="futuStatus" class="settings-hint" style="margin-top:8px;"></div>
+                    <div class="ta-section" style="margin-top: 12px;">
+                        <div class="ta-section-title">运行日志</div>
+                        <div class="ta-section-body" id="futuLogs">暂无日志</div>
+                    </div>
+                </div>
+            </div>
+
             <div id="pkTab" class="portfolio-tab-content hidden">
                 <div class="create-pk-section">
                     <h3>🎮 创建PK比赛</h3>
@@ -1215,8 +1226,8 @@
                             <div class="form-group">
                                 <label>每人初始资金</label>
                                 <div class="input-with-unit">
-                                    <input type="number" id="pkInitialCapital" placeholder="初始资金" value="1000000">
-                                    <span class="unit">元</span>
+                                    <input type="number" id="pkInitialCapital" placeholder="初始资金" value="100000">
+                                    <span class="unit">USD</span>
                                 </div>
                             </div>
                             <div class="form-group">
@@ -1350,10 +1361,10 @@
             <div class="trade-preview">
                 <div class="trade-preview-item">
                     <span class="label">预计金额</span>
-                    <span class="value" id="tradeEstimatedAmount">¥0.00</span>
+                    <span class="value" id="tradeEstimatedAmount">$0.00</span>
                 </div>
             </div>
-            <button class="btn-primary" onclick="executeTrade()">确认交易</button>
+            <button class="btn-primary" onclick="executeTrade()">提交订单</button>
         </div>
     </div>
 
@@ -1428,6 +1439,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=12"></script>
+    <script src="script.js?v=24"></script>
 </body>
 </html>
