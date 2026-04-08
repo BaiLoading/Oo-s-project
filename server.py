@@ -3945,22 +3945,204 @@ def get_ranking():
     except Exception as e:
         return jsonify({"error": f"获取榜单失败: {e}"}), 500
 
+_us_picker_cache = {"date": "", "payload": None, "ts": 0.0}
+_us_picker_lock = threading.Lock()
+
+
+def _extract_reasons_from_ta_report(md, max_items=3):
+    if not md:
+        return []
+    text = md.replace("\r\n", "\n")
+    seg = ""
+    if "### 最终决策" in text:
+        seg = text.split("### 最终决策", 1)[1]
+    elif "## Final Decision" in text:
+        seg = text.split("## Final Decision", 1)[1]
+    else:
+        seg = text
+    lines = [x.strip() for x in seg.split("\n") if x.strip()]
+    out = []
+    for ln in lines:
+        if ln.startswith("#"):
+            break
+        if ln.startswith("- "):
+            out.append(ln[2:].strip())
+        elif ln.startswith("* "):
+            out.append(ln[2:].strip())
+        if len(out) >= max_items:
+            break
+    if out:
+        return out[:max_items]
+    out = []
+    for ln in lines[:20]:
+        if ln.startswith("#"):
+            break
+        if len(ln) >= 8:
+            out.append(ln[:120])
+        if len(out) >= max_items:
+            break
+    return out[:max_items]
+
+
+def _us_universe_candidates():
+    return [
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "AVGO", "NFLX",
+        "JPM", "BAC", "GS", "MS", "V", "MA",
+        "XOM", "CVX", "COP", "SLB",
+        "UNH", "LLY", "JNJ", "PFE",
+        "KO", "PEP", "COST", "WMT",
+        "SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "SOXX",
+    ]
+
+
+def _score_us_candidates(symbols):
+    import pandas as pd
+    import yfinance as yf
+    df = yf.download(
+        tickers=" ".join(symbols),
+        period="2mo",
+        interval="1d",
+        auto_adjust=False,
+        progress=False,
+        group_by="ticker",
+        threads=False,
+    )
+    scores = []
+    for s in symbols:
+        sub = None
+        try:
+            if isinstance(df.columns, pd.MultiIndex):
+                if s in df.columns.get_level_values(0):
+                    sub = df[s]
+            else:
+                sub = df
+        except Exception:
+            sub = None
+        if sub is None or sub.empty:
+            continue
+        sub = sub.dropna()
+        if len(sub) < 25:
+            continue
+        close = sub["Close"].astype(float)
+        r5 = (close.iloc[-1] / close.iloc[-6] - 1.0) if len(close) >= 6 else 0.0
+        r20 = (close.iloc[-1] / close.iloc[-21] - 1.0) if len(close) >= 21 else 0.0
+        vol = close.pct_change().rolling(20).std().iloc[-1]
+        vol = float(vol) if vol == vol else 0.0
+        score = r5 * 100.0 + r20 * 50.0 - vol * 100.0
+        scores.append((s, float(score), float(close.iloc[-1])))
+    scores.sort(key=lambda x: x[1], reverse=True)
+    return scores
+
+
+def _ta_symbol_report(symbol, date_str):
+    venv_py = os.path.join(os.path.dirname(__file__), ".venv_tradingagents", "bin", "python")
+    runner = os.path.join(os.path.dirname(__file__), "tradingagents_runner.py")
+    if not os.path.exists(venv_py):
+        raise RuntimeError("TradingAgents 未安装（缺少 .venv_tradingagents）")
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError("未配置 OPENAI_API_KEY（仅后端保存，不要放到前端）")
+    deep_model = (os.environ.get("TA_PICKER_DEEP_MODEL") or "gpt-4o").strip()
+    quick_model = (os.environ.get("TA_PICKER_QUICK_MODEL") or "gpt-4o-mini").strip()
+    cmd = [
+        venv_py, runner,
+        "--symbol", symbol,
+        "--date", date_str,
+        "--language", "Chinese",
+        "--mode", "fast",
+        "--analysts", "market",
+        "--deep_model", deep_model,
+        "--quick_model", quick_model,
+        "--timeout_seconds", "90",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, cwd=os.path.dirname(__file__))
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or out or "TradingAgents failed")[:2000])
+    return json.loads(out) if out else {}
+
+
+def _us_picker_payload(date_str):
+    import random
+    symbols = _us_universe_candidates()
+    scores = _score_us_candidates([s for s in symbols if s not in ["SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "SOXX"]])
+    top = [s for s, _, _ in scores[:8]]
+    if not top:
+        raise RuntimeError("无法获取美股候选数据")
+    picks = []
+    for sym in top[:5]:
+        r = _ta_symbol_report(sym, date_str)
+        decision = str((r.get("decision") or "")).strip().lower()
+        md = str((r.get("report_markdown") or "")).strip()
+        reasons = _extract_reasons_from_ta_report(md, max_items=3)
+        q = _fetch_us_quotes([sym]).get(sym) or {}
+        px = float(q.get("price") or 0.0)
+        chg = float(q.get("changePercent") or 0.0)
+        if px <= 0:
+            for ss, _, last_px in scores:
+                if ss == sym:
+                    px = float(last_px or 0.0)
+                    break
+        buy_price = round(px * (1 - 0.002), 2) if px > 0 else 0.0
+        stop_loss = round(px * (1 - 0.05), 2) if px > 0 else 0.0
+        tail = []
+        if decision:
+            tail.append(f"TradingAgents 观点：{decision}")
+        if not reasons:
+            tail.append("信号来源：TradingAgents 多智能体分析（分钟线更敏感）")
+        reasons = (reasons or tail)[:3]
+        picks.append({
+            "code": sym,
+            "name": sym,
+            "industry": "US",
+            "currency": "USD",
+            "currentPrice": px,
+            "changePercent": chg,
+            "pe": 0,
+            "pb": 0,
+            "reasons": reasons,
+            "buyPrice": buy_price,
+            "stopLoss": stop_loss,
+        })
+    etfs = ["SPY", "QQQ"]
+    pick_set = {p["code"] for p in picks}
+    if any(s in pick_set for s in ["NVDA", "AMD", "AVGO"]):
+        etfs.append("SOXX")
+    options = [
+        "若看多单一标的，可关注 1-2 个月到期的看涨价差（bull call spread）控制风险",
+        "若看空/对冲，可关注保护性认沽（protective put）或领口策略（collar）",
+    ]
+    return {"data": picks, "extras": {"etfs": etfs[:4], "options": options}}
+
+
 @app.route("/api/stock/picker")
 def get_picker():
-    """智能选股 — akshare 实时数据 + 通义千问理由生成"""
+    market = (request.args.get("market") or "cn").strip().lower()
+    if market == "us":
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        with _us_picker_lock:
+            if _us_picker_cache["payload"] is not None and _us_picker_cache["date"] == date_str and (time.time() - float(_us_picker_cache["ts"] or 0)) < 6 * 3600:
+                p = _us_picker_cache["payload"]
+                return jsonify({"success": True, "market": "us", "data": p["data"], "extras": p.get("extras") or {}, "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        try:
+            p = _us_picker_payload(date_str)
+            with _us_picker_lock:
+                _us_picker_cache["payload"] = p
+                _us_picker_cache["date"] = date_str
+                _us_picker_cache["ts"] = time.time()
+            return jsonify({"success": True, "market": "us", "data": p["data"], "extras": p.get("extras") or {}, "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        except Exception as e:
+            return jsonify({"success": False, "error": f"美股智能选股失败: {e}"}), 502
+
     try:
-        import builtins, akshare as ak, time, random, pandas as pd
+        import builtins, akshare as ak, random, pandas as pd
         _orig_print = builtins.print
-        builtins.print = lambda *a, **k: None   # suppress all akshare prints
+        builtins.print = lambda *a, **k: None
         targets = ["600519", "000858", "300750", "601318", "600036",
                    "002594", "000333", "601012", "002415", "300059"]
         mock = [
-            {"代码": "600519", "名称": "贵州茅台", "最新价": 1680.0, "涨跌幅": 2.35,
-             "市盈率-动态": 32.5, "市净率": 9.8},
-            {"代码": "300750", "名称": "宁德时代", "最新价": 195.5, "涨跌幅": -0.82,
-             "市盈率-动态": 28.3, "市净率": 4.5},
-            {"代码": "600036", "名称": "招商银行", "最新价": 32.80, "涨跌幅": 0.35,
-             "市盈率-动态": 8.5,  "市净率": 1.2},
+            {"代码": "600519", "名称": "贵州茅台", "最新价": 1680.0, "涨跌幅": 2.35, "市盈率-动态": 32.5, "市净率": 9.8},
+            {"代码": "300750", "名称": "宁德时代", "最新价": 195.5, "涨跌幅": -0.82, "市盈率-动态": 28.3, "市净率": 4.5},
+            {"代码": "600036", "名称": "招商银行", "最新价": 32.80, "涨跌幅": 0.35, "市盈率-动态": 8.5,  "市净率": 1.2},
         ]
         selected = None
         try:
@@ -3972,9 +4154,7 @@ def get_picker():
                 selected = pd.concat([maotai, sel], ignore_index=True)
             elif len(maotai) > 0:
                 selected = maotai
-        except Exception as e:
-            builtins.print = _orig_print
-            print(f"[!] picker real-time failed: {e}")
+        except Exception:
             selected = pd.DataFrame(mock[:3])
         finally:
             builtins.print = _orig_print
@@ -3987,12 +4167,9 @@ def get_picker():
             pct   = float(row["涨跌幅"]) if pd.notna(row.get("涨跌幅")) else 0
             pe    = float(row["市盈率-动态"]) if pd.notna(row.get("市盈率-动态")) and row["市盈率-动态"] > 0 else 0
             pb    = float(row["市净率"]) if pd.notna(row.get("市净率")) and row["市净率"] > 0 else 0
-
-            # 生成理由
             reasons = []
             ai_resp = call_qwen_api(
-                f"股票{name}({code})现价¥{price}，涨跌幅{pct:+.2f}%，PE={pe}，PB={pb}。"
-                "请给出3条简洁买入理由，以JSON数组返回，如[\"理由1\",\"理由2\",\"理由3\"]",
+                f"股票{name}({code})现价¥{price}，涨跌幅{pct:+.2f}%，PE={pe}，PB={pb}。请给出3条简洁买入理由，以JSON数组返回，如[\"理由1\",\"理由2\",\"理由3\"]",
                 system_prompt="你是一位专业股票分析师，回复JSON数组。")
             if ai_resp:
                 try:
@@ -4000,12 +4177,10 @@ def get_picker():
                     m = _re.search(r'\[[\s\S]*\]', ai_resp)
                     if m:
                         reasons = json.loads(m.group(0))
-                except:
+                except Exception:
                     pass
             if len(reasons) < 2:
-                reasons = [f"涨跌幅{pct:+.2f}%，走势{'强' if pct > 0 else '弱'}",
-                           f"PE={pe:.1f}{'估值合理' if 0<pe<40 else '估值偏高'}",
-                           f"PB={pb:.1f}{'资产质量好' if 0<pb<3 else ''}"]
+                reasons = [f"涨跌幅{pct:+.2f}%，走势{'强' if pct > 0 else '弱'}", f"PE={pe:.1f}", f"PB={pb:.1f}"]
 
             industry_map = {"600519":"白酒","300750":"新能源","601318":"保险",
                              "600036":"银行","002594":"汽车","000333":"家电",
@@ -4019,10 +4194,9 @@ def get_picker():
                 "buyPrice":  round(price * (1 + random.uniform(-0.01, 0.015)), 2),
                 "stopLoss":  round(price * (1 - random.uniform(0.03, 0.06)), 2),
             })
-        return jsonify({"success": True, "data": recs,
-                        "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        return jsonify({"success": True, "market": "cn", "data": recs, "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
     except Exception as e:
-        return jsonify({"error": f"智能选股失败: {e}"}), 500
+        return jsonify({"success": False, "error": f"智能选股失败: {e}"}), 500
 
 
 # ============================================================

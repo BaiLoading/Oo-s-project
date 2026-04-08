@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>股票智能分析系统</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css?v=24">
+    <link rel="stylesheet" href="style.css?v=25">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -780,7 +780,7 @@
         <div id="stockPickerSection" class="hidden">
             <div class="stock-picker-tabs">
                 <button class="stock-picker-tab active" onclick="switchStockPickerTab('cn')">🇨🇳 A股</button>
-                <button class="stock-picker-tab disabled" disabled>🇺🇸 美股</button>
+                <button class="stock-picker-tab" onclick="switchStockPickerTab('us')">🇺🇸 美股</button>
             </div>
 
             <div id="cnStockPickerTab" class="stock-picker-tab-content">
@@ -797,8 +797,16 @@
             </div>
 
             <div id="usStockPickerTab" class="stock-picker-tab-content hidden">
-                <div class="stock-picker-unavailable">
-                    <p>🇺🇸 美股选股功能即将上线</p>
+                <div class="stock-picker-header">
+                    <h2>🎯 每日精选股票（美股）</h2>
+                    <p class="stock-picker-subtitle">由 TradingAgents 生成（使用后端统一配置的 OpenAI Key）</p>
+                </div>
+                <div id="usStockPickerExtras" class="stock-picker-list" style="margin-bottom:12px;"></div>
+                <div id="usStockPickerList" class="stock-picker-list">
+                    <div class="loading-picker">
+                        <div class="spinner"></div>
+                        <p>正在加载推荐股票...</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1439,6 +1447,6 @@
         </main>
     </div>
 
-    <script src="script.js?v=24"></script>
+    <script src="script.js?v=25"></script>
 </body>
 </html>

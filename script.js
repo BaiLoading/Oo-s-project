@@ -2073,7 +2073,7 @@ function switchTab(tab) {
     } else if (tab === 'stockPicker') {
         tabs[2].classList.add('active');
         stockPickerSection.classList.remove('hidden');
-        loadStockPicker();
+        switchStockPickerTab('cn');
     } else if (tab === 'finance') {
         tabs[3].classList.add('active');
         if (financeSection) {
@@ -2110,12 +2110,16 @@ function switchStockPickerTab(tab) {
     if (tab === 'cn') {
         tabs[0].classList.add('active');
         cnTab.classList.remove('hidden');
-        loadStockPicker();
+        loadStockPicker('cn');
+    } else if (tab === 'us') {
+        tabs[1].classList.add('active');
+        usTab.classList.remove('hidden');
+        loadStockPicker('us');
     }
 }
 
-async function loadStockPicker() {
-    const container = document.getElementById('stockPickerList');
+async function loadStockPicker(market = 'cn') {
+    const container = document.getElementById(market === 'us' ? 'usStockPickerList' : 'stockPickerList');
     if (!container) return;
     
     container.innerHTML = `
@@ -2126,21 +2130,25 @@ async function loadStockPicker() {
     `;
     
     try {
-        const response = await apiFetch('/api/stock/picker');
-        const result = await response.json();
+        const response = await apiFetch(`/api/stock/picker?market=${encodeURIComponent(market)}`);
+        const result = await readJsonOrThrow(response);
         
         if (result.success && result.data) {
-            renderStockPicker(result.data);
+            if (market === 'us') {
+                renderStockPickerUS(result.data, result.extras || {});
+            } else {
+                renderStockPickerCN(result.data);
+            }
         } else {
             container.innerHTML = '<p style="color: #ff4757; text-align: center; padding: 60px 20px;">加载失败，请稍后重试</p>';
         }
     } catch (error) {
         console.error('加载智能选股失败:', error);
-        container.innerHTML = '<p style="color: #ff4757; text-align: center; padding: 60px 20px;">网络错误，请稍后重试</p>';
+        container.innerHTML = `<p style="color: #ff4757; text-align: center; padding: 60px 20px;">${escapeHtml(error && error.message ? error.message : '网络错误，请稍后重试')}</p>`;
     }
 }
 
-function renderStockPicker(stocks) {
+function renderStockPickerCN(stocks) {
     const container = document.getElementById('stockPickerList');
     if (!container) return;
     
@@ -2193,6 +2201,73 @@ function renderStockPicker(stocks) {
                     <div class="picker-target-item">
                         <span class="picker-target-label">⚠️ 建议止损价</span>
                         <span class="picker-target-value stop">¥${stock.stopLoss.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderStockPickerUS(stocks, extras) {
+    const container = document.getElementById('usStockPickerList');
+    if (!container) return;
+    const extraEl = document.getElementById('usStockPickerExtras');
+    if (extraEl) {
+        const etfs = (extras.etfs || []).map(x => `<span class="strategy-tag">${escapeHtml(String(x))}</span>`).join(' ');
+        const options = (extras.options || []).map(x => `<div class="picker-reason-item"><span class="picker-reason-dot">•</span><span>${escapeHtml(String(x))}</span></div>`).join('');
+        extraEl.innerHTML = `
+            <div class="stock-picker-card">
+                <div class="picker-reasons">
+                    <div class="picker-reasons-title">📌 重点关注</div>
+                    <div class="picker-reasons-list">
+                        ${etfs ? `<div class="picker-reason-item"><span class="picker-reason-dot">•</span><span>ETF：${etfs}</span></div>` : ''}
+                        ${options ? `<div class="picker-reason-item"><span class="picker-reason-dot">•</span><span>期权思路（非投资建议）：</span></div>${options}` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    container.innerHTML = stocks.map(stock => {
+        const chg = Number(stock.changePercent || 0);
+        const changeClass = chg >= 0 ? 'positive' : 'negative';
+        const changeSign = chg >= 0 ? '+' : '';
+        const px = Number(stock.currentPrice || 0);
+        const buy = Number(stock.buyPrice || 0);
+        const sl = Number(stock.stopLoss || 0);
+        const reasons = Array.isArray(stock.reasons) ? stock.reasons : [];
+        return `
+            <div class="stock-picker-card">
+                <div class="picker-card-header">
+                    <div class="picker-stock-info">
+                        <div class="picker-stock-name">${escapeHtml(stock.name || stock.code || '')}</div>
+                        <div class="picker-stock-code">${escapeHtml(stock.code || '')}</div>
+                        ${stock.industry ? `<span class="picker-stock-industry">${escapeHtml(stock.industry)}</span>` : ''}
+                    </div>
+                    <div class="picker-price-info">
+                        <div class="picker-current-price">$${px.toFixed(2)}</div>
+                        <div class="picker-change ${changeClass}">${changeSign}${chg.toFixed(2)}%</div>
+                    </div>
+                </div>
+                <div class="picker-reasons">
+                    <div class="picker-reasons-title">📋 推荐理由</div>
+                    <div class="picker-reasons-list">
+                        ${reasons.map(reason => `
+                            <div class="picker-reason-item">
+                                <span class="picker-reason-dot">•</span>
+                                <span>${escapeHtml(String(reason))}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                <div class="picker-price-targets">
+                    <div class="picker-target-item">
+                        <span class="picker-target-label">🎯 参考买入价</span>
+                        <span class="picker-target-value buy">$${buy.toFixed(2)}</span>
+                    </div>
+                    <div class="picker-target-item">
+                        <span class="picker-target-label">⚠️ 参考止损价</span>
+                        <span class="picker-target-value stop">$${sl.toFixed(2)}</span>
                     </div>
                 </div>
             </div>
