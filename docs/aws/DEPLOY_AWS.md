@@ -80,6 +80,8 @@ source .venv/bin/activate
 python tools/install_tradingagents.py
 ```
 
+说明：该安装脚本会从 GitHub 拉取 TauricResearch/TradingAgents 源码到 `vendor/TradingAgents` 并以 editable 方式安装，确保与官方仓库一致。
+
 安装完成后，检查：
 
 - http://<your-ec2-ip>:3000/api/ai/tradingagents/health

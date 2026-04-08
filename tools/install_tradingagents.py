@@ -5,6 +5,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 VENV_DIR = os.path.join(ROOT, ".venv_tradingagents")
+VENDOR_DIR = os.path.join(ROOT, "vendor", "TradingAgents")
+REPO_URL = "https://github.com/TauricResearch/TradingAgents.git"
 
 
 def _run(cmd):
@@ -21,20 +23,19 @@ def main():
     vpy = os.path.join(VENV_DIR, "bin", "python")
     _run([vpy, "-m", "pip", "install", "-U", "pip", "wheel", "setuptools"])
 
-    candidates = [
-        ["tradingagents"],
-        ["trading-agents"],
-    ]
+    os.makedirs(os.path.dirname(VENDOR_DIR), exist_ok=True)
     extra = (os.environ.get("TA_PIP_EXTRA") or "").strip()
-    for pkg in candidates:
-        try:
-            cmd = [vpy, "-m", "pip", "install", "-U", *pkg]
-            if extra:
-                cmd.extend(extra.split())
-            _run(cmd)
-            break
-        except SystemExit:
-            continue
+
+    if not os.path.exists(VENDOR_DIR):
+        _run(["git", "clone", "--depth", "1", REPO_URL, VENDOR_DIR])
+    else:
+        _run(["git", "-C", VENDOR_DIR, "fetch", "--depth", "1", "origin"])
+        _run(["git", "-C", VENDOR_DIR, "reset", "--hard", "origin/HEAD"])
+
+    cmd = [vpy, "-m", "pip", "install", "-U", "-e", VENDOR_DIR]
+    if extra:
+        cmd.extend(extra.split())
+    _run(cmd)
 
     need = [
         "pandas",
@@ -50,8 +51,8 @@ def main():
 
     print("OK")
     print(VENV_DIR)
+    print(VENDOR_DIR)
 
 
 if __name__ == "__main__":
     main()
-

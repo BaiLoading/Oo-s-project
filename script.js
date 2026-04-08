@@ -2073,7 +2073,7 @@ function switchTab(tab) {
     } else if (tab === 'stockPicker') {
         tabs[2].classList.add('active');
         stockPickerSection.classList.remove('hidden');
-        switchStockPickerTab('cn');
+        switchStockPickerTab('us');
     } else if (tab === 'finance') {
         tabs[3].classList.add('active');
         if (financeSection) {

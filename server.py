@@ -4116,7 +4116,7 @@ def _us_picker_payload(date_str):
 
 @app.route("/api/stock/picker")
 def get_picker():
-    market = (request.args.get("market") or "cn").strip().lower()
+    market = (request.args.get("market") or "us").strip().lower()
     if market == "us":
         date_str = datetime.now().strftime("%Y-%m-%d")
         with _us_picker_lock:

@@ -53,6 +53,7 @@ vendor/TradingAgents/
 .venv_tradingagents/
 results/
 /.futu_runtime/
+vendor/TradingAgents/
 *.sqlite3-wal
 *.sqlite3-shm
 *.sqlite3-journal
